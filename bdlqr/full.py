@@ -3,6 +3,7 @@ import warnings
 from itertools import starmap, repeat, zip_longest
 from functools import partial
 from collections import deque
+from operator import attrgetter
 
 import numpy as np
 
@@ -156,6 +157,7 @@ class LinearSystem:
     def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-4):
         if not x0.shape[0] == self.A.shape[0]: raise ValueError()
         P_t = self.Q_T
+        traj_len = int(min(self.T, traj_len))
         Ps = deque([P_t], traj_len)
         os = deque([self.s_T], traj_len)
         Ks = deque([], traj_len)
@@ -175,15 +177,17 @@ class LinearSystem:
             Ks.appendleft(K_t)
             ks.appendleft(k_t)
 
-        us = []
         xs = [x0]
+        us = [-Ks[0].dot(xs[0]) - ks[0]]
         # forward
         if math.isinf(self.T):
             Ks = repeat(Ks[0])
             ks = repeat(ks[0])
+
         for t, K, k in zip(range(traj_len), Ks, ks):
-            us.append(-K.dot(xs[t]) - k)
             xs.append(self.f(xs[t], us[t], t))
+            if t+1 < self.T:
+                us.append(-K.dot(xs[t+1]) - k)
         return xs, us
 
 
@@ -201,11 +205,11 @@ def quadrotor_linear_system(m=1,
          [1/m]]
     R = [[r0]]
     Q_T = Q
-    def plotables(xs, us, linsys):
-        costs = list(linsys.costs(xs, us))[1:]
-        return [("pos", np.array([x[0] for x in xs[1:]])),
-                ("vel", np.array([x[1] for x in xs[1:]])),
-                ("ctrl", np.array(us)),
+    def plotables(xs, us, linsys, traj_len):
+        costs = list(linsys.costs(xs, us))[:traj_len]
+        return [("pos", np.array([x[0] for x in xs[:traj_len]])),
+                ("vel", np.array([x[1] for x in xs[:traj_len]])),
+                ("ctrl", np.array(us[:traj_len])),
                 ("cost", costs)]
     x0 = np.array([-1, 0])
     return [plotables, x0] + list(map(np.array, [A, B, Q, np.zeros_like(x0), R, np.zeros((1,)),
@@ -230,12 +234,13 @@ def plot_solution(Ts, ylabel_ydata, axes=None,
 def test_quadrotor_linear_system_plot():
     # plot cost, trajectory, control
     fig = None
+    traj_len = 30
     for r0 in [1, 10, 100]:
         plotables, x0, *linsys = quadrotor_linear_system(r0=r0)
         quad = LinearSystem(*linsys)
-        xs, us = quad.solve(x0, 30)
-        ylabels_ydata = plotables(xs, us, quad)
-        fig = plot_solution(np.arange(1, len(xs)), ylabels_ydata,
+        xs, us = quad.solve(x0, traj_len)
+        ylabels_ydata = plotables(xs, us, quad, traj_len)
+        fig = plot_solution(np.arange(traj_len), ylabels_ydata,
                             axes=None if fig is None else fig.axes,
                             plot_fn=partial(Axes.plot,
                                             label='{}'.format(r0)))

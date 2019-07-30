@@ -1,7 +1,7 @@
 from functools import partial
 from collections import namedtuple
 from operator import attrgetter
-from itertools import starmap
+from itertools import zip_longest
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -11,7 +11,7 @@ from bdlqr.full import LinearSystem, quadrotor_linear_system, plot_solution
 from bdlqr.diff_substr import diff_substr
 
 
-def solve_seq(slsys, y0, x0):
+def solve_seq(slsys, y0, x0, traj_len):
     """
     minimize_v ∑ₜ yₜQₜyₜ
     s.t.          yₜ₊₁ = Ay yₜ + Bv vₜ
@@ -28,8 +28,9 @@ def solve_seq(slsys, y0, x0):
     Ax   = slsys.Ax
     Bu   = slsys.Bu
     T    = slsys.T
-    y_sys = LinearSystem(Ay, Bv, Qy, R, QyT, T)
-    ys, vs = y_sys.solve(y0)
+    y_sys = LinearSystem(Ay, Bv, Qy, np.zeros(Qy.shape[0]), R,
+                         np.zeros(R.shape[0]), QyT, np.zeros(QyT.shape[0]), T)
+    ys, vs = y_sys.solve(y0, traj_len + 1)
 
     # Reformulate the affine to a linear system by making the state a
     # homogeneous vector
@@ -51,8 +52,11 @@ def solve_seq(slsys, y0, x0):
     Axh = np.eye(x0h.shape[0])
     Axh[:-1, :-1] = Ax
     Buh = np.vstack((Bu, 0))
-    x_sys = LinearSystem(Axh, Buh, Qsx[:-1], R, Qsx[-1], T)
-    xhs, us = x_sys.solve(x0h)
+    x_sys = LinearSystem(Axh, Buh,
+                         Qsx[:-1], np.zeros(Qsx[0].shape[0]),
+                         R, np.zeros(R.shape[0]),
+                         Qsx[-1], np.zeros(Qsx[-1].shape[0]), T)
+    xhs, us = x_sys.solve(x0h, traj_len)
     xs = [xh[:-1] for xh in xhs]
     assert xs[0].shape[0] == x0.shape[0]
     assert ys[0].shape[0] == y0.shape[0]
@@ -92,15 +96,18 @@ def joint_linear_system(slsys, y0, x0):
     return A, B, Q, R, QT, T, X0
 
 
-def solve_full(slsys, y0, x0):
+def solve_full(slsys, y0, x0, traj_len):
     A, B, Q, R, QT, T, X0 = joint_linear_system(slsys, y0, x0)
-    Xs, us = LinearSystem(A, B, Q, R, QT, T).solve(X0)
+    Xs, us = LinearSystem(A, B,
+                          Q, np.zeros(Q.shape[0]),
+                          R, np.zeros(R.shape[0]),
+                          QT, np.zeros(QT.shape[0]), T).solve(X0, traj_len)
     ys = [X[:y0.shape[0]] for X in Xs]
     xs = [X[y0.shape[0]:] for X in Xs]
     return ys, xs, us
 
 
-def solve_admm(slsys, y0, x0, ε=1e-2, ρ=1, max_iter=10):
+def solve_admm(slsys, y0, x0, traj_len, ε=1e-2, ρ=1, max_iter=10):
     """
     Solve the two minimizations alternatively:
 
@@ -120,24 +127,26 @@ def solve_admm(slsys, y0, x0, ε=1e-2, ρ=1, max_iter=10):
     Ax   = slsys.Ax
     Bu   = slsys.Bu
     T    = slsys.T
-    ys, xs, us = solve_seq(slsys, y0, x0)
-    vs = [E.dot(x) for x in xs]
-    ws = [np.zeros(vs[0].shape[0]) for _ in range(T)]
+    ys, xs, us = solve_seq(slsys, y0, x0, traj_len)
+    vs = [E.dot(x) for x in xs[:-1]]
+    ws = [np.zeros(vs[0].shape[0]) for _ in range(len(vs))]
 
     for k in range(max_iter):
         #
         # minimize_v ∑ₜ yₜQₜyₜ + wₖₜᵀ(E xₖₜ - vₜ) + 0.5 ρ|E xₖₜ - vₜ|²
         # s.t.          yₜ₊₁ = Ay yₜ + Bv vₜ
         # Rᵥ = 0.5 ρ I
-        # Zᵥ = - E xₖₜ + wₖₜ/ρ
-        sqrtRs = [np.hstack(( np.eye(vs[0].shape[0]), (- E.dot(x) + w/ρ).reshape(-1,1) ))
-                  for x, w in zip(xs, ws)]
-        Rsvh = [0.5 * ρ * sqrtR.T.dot(sqrtR)
-               for sqrtR in sqrtRs]
-        Bvh = np.hstack((Bv, np.zeros((Bv.shape[0], 1))))
-        y_sys  = LinearSystem(Ay, Bvh, Qy, Rsvh, QyT, T)
-        ys_new, vhs_new = y_sys.solve(y0)
-        vs_new = [vh_new[:-1] for vh_new in vhs_new]
+        # zᵥ = 0.5 ρ ( - E xₖₜ + wₖₜ/ρ )
+        Rsv = [0.5 * ρ * np.eye(E.shape[0])
+               for _ in vs]
+        zsv = [0.5 * ρ * ( -E.dot(x) + w/ρ )
+               for x, w in zip(xs, ws)]
+
+        y_sys  = LinearSystem(Ay, Bv,
+                              Qy, np.zeros(Qy.shape[0]),
+                              Rsv, zsv,
+                              QyT, np.zeros(QyT.shape[0]), T)
+        ys_new, vs_new = y_sys.solve(y0, traj_len + 1)
 
         # Reformulate the affine to a linear system by making the state a
         # homogeneous vector
@@ -158,8 +167,12 @@ def solve_admm(slsys, y0, x0, ε=1e-2, ρ=1, max_iter=10):
         Axh     = np.eye(x0h.shape[0])
         Axh[:-1, :-1] = Ax
         Buh     = np.vstack((Bu, 0))
-        x_sys   = LinearSystem(Axh, Buh, Qxs[:-1], R, Qxs[-1], T)
-        xhs_new, us_new = x_sys.solve(x0h)
+        x_sys   = LinearSystem(Axh, Buh,
+                               Qxs[:-1], np.zeros(Qxs[0].shape[0]),
+                               R, np.zeros(R.shape[0]),
+                               Qxs[-1], np.zeros(Qxs[-1].shape[0]),
+                               T)
+        xhs_new, us_new = x_sys.solve(x0h, traj_len)
         xs_new = [xh[:-1] for xh in xhs_new]
         ws_new = [w + ρ * (E.dot(x_new) - v_new)
                   for w, x_new, v_new in zip(ws, xs_new, vs_new)]
@@ -192,27 +205,28 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                     vₜ = E xₜ
                   xₜ₊₁ = Ax xₜ₊₁ + Bu uₜ
     """
-    def cost(self, x_t, u_t, t):
-        Q = self.QyT if t >= self.T else self.Qy
+    def costs(self, xs, us):
+        Q = lambda t: self.QyT if t >= self.T else self.Qy
         R = self.R
-        return x_t.T.dot(Q).dot(x_t) + (0
+        return [x_t.T.dot(Q(t)).dot(x_t) + (0
                                         if t >= self.T
                                         else u_t.T.dot(R).dot(u_t))
+                for t, (x_t, u_t) in enumerate(zip_longest(xs, us))]
 
 
 def quadrotor_square_example():
-    _, y0, Ay, Bv, Qy, _, QyT, T = quadrotor_linear_system()
-    _, x0, Ax, Bu, _, R, _, T = quadrotor_linear_system()
+    _, y0, Ay, Bv, Qy, _, _, _, QyT, _, _ = quadrotor_linear_system()
+    _, x0, Ax, Bu, _, _, R, _, _, _, _ = quadrotor_linear_system()
     E = np.hstack((np.eye(Bv.shape[1]),
                    np.zeros((Bv.shape[1], Ax.shape[1] - Bv.shape[1]))))
-    def plotables(ys, xs, us, linsys):
-        costs = list(starmap(linsys.cost, zip(xs[1:], us, range(1, len(us)+1))))
-        return [("y[0]", np.array([x[0] for x in ys[1:]])),
-                ("y[1]", np.array([x[0] for x in ys[1:]])),
-                ("u[0]", np.array(us)),
+    def plotables(ys, xs, us, linsys, traj_len):
+        costs = linsys.costs(xs, us)[:traj_len]
+        return [("y[0]", np.array([x[0] for x in ys[:traj_len]])),
+                ("y[1]", np.array([x[0] for x in ys[:traj_len]])),
+                ("u[0]", np.array(us[:traj_len])),
                 ("cost", costs)]
 
-    return plotables, y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T
+    return plotables, y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, 100
 
 
 def quadrotor_as_separable(m=1,
@@ -222,22 +236,22 @@ def quadrotor_as_separable(m=1,
                            E=[[1.]],
                            Qy=[[1]],
                            Ax=[[1.]],
-                           T=30):
+                           T=100):
     Bu=[[1/m]]
     R=[[r0]]
     QyT = [[100]]
     y0 = np.array([-1])
     x0 = np.array([0])
-    def plotables(ys, xs, us, linsys):
-        costs = list(starmap(linsys.cost, zip(xs[1:], us, range(1, len(us)+1))))
-        return [("pos", np.array([x[0] for x in ys[1:]])),
-                ("vel", np.array([x[0] for x in xs[1:]])),
-                ("ctrl", np.array(us)),
+    def plotables(ys, xs, us, linsys, traj_len):
+        costs = linsys.costs(xs, us)[:traj_len]
+        return [("pos", np.array([y[0] for y in ys[:traj_len]])),
+                ("vel", np.array([x[0] for x in xs[:traj_len]])),
+                ("ctrl", np.array(us[:traj_len])),
                 ("cost", costs)]
     return [plotables] + list(map(np.array, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T)))
 
 
-def plot_separable_sys_results(example=quadrotor_square_example):
+def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30):
     plotables, y0, x0, *sepsys = example()
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
@@ -245,9 +259,9 @@ def plot_separable_sys_results(example=quadrotor_square_example):
     labels = map(attrgetter('__name__'), solvers)
     short_labels = diff_substr(labels)
     for solver, label in zip(solvers, short_labels):
-        ys_full, xs_full, us_full = solver(slsys, y0, x0)
-        fig = plot_solution(np.arange(1, slsys.T+1),
-                            plotables(ys_full, xs_full, us_full, slsys),
+        ys_full, xs_full, us_full = solver(slsys, y0, x0, traj_len)
+        fig = plot_solution(np.arange(traj_len),
+                            plotables(ys_full, xs_full, us_full, slsys, traj_len),
                             axes= None if fig is None else fig.axes,
                             plot_fn=partial(Axes.plot, label=label))
     if fig is not None:
