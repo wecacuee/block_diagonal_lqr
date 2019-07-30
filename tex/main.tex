@@ -1,0 +1,148 @@
+\documentclass[]{article}
+\usepackage[colorlinks]{hyperref}
+\usepackage[margin=1in]{geometry}
+\usepackage[numbers]{natbib}
+\usepackage{algorithmic}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{tikz}
+\usepackage{xcolor}
+\usepackage{import}
+\input{preamble}
+
+\title{Block diagonal LQR}
+\author{Vikas Dhiman}
+
+\begin{document}
+\maketitle
+
+\section{LQR problem}
+
+\begin{equation}
+  \begin{split}
+  \act^* &= \arg \min_{\act} \state_T^\top Q_T\state
+  + \sum_{t=1}^{T-1} \state_t^\top Q \state_t
+  + \act_t^\top R \act_t
+  \\
+  \text{s.t.}&
+  \\
+  \state_{t+1} &= A \state_t + B \act_t
+  \end{split}
+\end{equation}
+
+\section{Assumptions}
+
+\paragraph{Block diagonal assumptions}
+
+\begin{align}
+  A &= \begin{bmatrix}
+    A_1 & E_{21} \\
+    E_{12}  & A_2
+  \end{bmatrix}
+              = A_d + E_{\neg d}
+  \\
+  B &= \begin{bmatrix}B_1\\ 0\end{bmatrix}
+  \\
+  Q &= \begin{bmatrix}
+    Q_1 & 0 \\
+    0  & Q_2
+  \end{bmatrix}
+\end{align}
+where $E_{12}$ is low rank $\rank(E_{12}) < \lambda$ and encodes how robot 1
+effects environment 2. Let a matrix of type $A$, whose off-diagonal blocks are
+low rank be called low-offset block diagonal matrix.
+
+\section{Solution}
+
+For a discrete-time linear system the LQR solution is
+
+\begin{align}
+  \act_k &= -F_k\state_k
+           \\
+  F_k &= (R + B^\top P_{k+1}B)^{-1}B^\top P_{k+1}A
+  \\
+  P_{k-1} &= A^\top P_k( I - B(R + B^\top P_k B)^{-1}B^\top P_k) A + Q
+\end{align}%
+% 
+
+For the block diagonal LQR:
+\begin{align}
+  P_k = \begin{bmatrix}
+    P_{1,k-1} & P^\top_{12,k-1}
+    \\
+    P_{12,k-1} & P_{2,k-1}
+    \end{bmatrix}
+\end{align}
+
+$P_T = Q_T$ is block diagonal.
+Note that:
+
+\begin{align}
+  A^\top P_k A
+               &= A_d^\top P_k A_d +  A_d^\top P_k E_{\neg d}
+                 + E_{\neg d}^\top P_k A_d
+                 + E_{\neg d}^\top P_k E_{\neg d}
+  \\
+  &= \begin{bmatrix}
+    A_1^\top P_{1,k} A_1 & A_1^\top P_{12,k} A_2
+    \\
+    A_2^\top P_{12,k} A_1 & A_2^\top P_{2,k} A_2
+    \end{bmatrix}
+  + 2\begin{bmatrix}
+    A_1^\top P_{12,k} E_{21} & A_1^\top P_{1,k} E_{12}
+    \\
+    A_2^\top P_{1,k} E_{21} & A_2^\top P_{21,k} E_{12}
+    \end{bmatrix}
+  + \begin{bmatrix}
+    E_{21}^\top P_{2,k} E_{21} & E_{21}^\top P_{12,k} E_{12}
+    \\
+    E_{12}^\top P_{12,k} E_{21} & E_{21}^\top P_{1,k} E_{12}
+    \end{bmatrix}
+\end{align}
+%
+If $P_k$ is low-offset block diagonal and $A$ is low-offset block diagonal then
+$A^\top P_k A$ is also low-offset block diagonal. $I - BXB^\top P_k$ is block
+diagonal for any matrix $X$. Hence $P_{k-1}$ is low-offset block diagonal.
+
+%
+\begin{align}
+  B^\top P_k B &= B_1^\top P_{1,k} B_1
+  \\
+  A^\top P_k B &=
+  \begin{bmatrix}
+    A_1^\top P_1 B_1
+    \\
+    A_2^\top P_{21} B_1
+  \end{bmatrix}
+  + \begin{bmatrix}
+    E_{21}^\top P_{21} B_1
+    \\
+    E_{12}^\top P_1 B_1
+  \end{bmatrix}
+\end{align}%
+% 
+
+\begin{align}
+  P_{1,k-1} &= 
+    A_1^\top P_{1k} A_1 - (A_1^\top P_{1k} B_1)(R + B_1^\top P_{1k} B_1)^{-1}(B_1^\top P_{1k}A_1) + Q_1
+  \\
+  P_{2,k-1} &= 
+    A_2^\top P_{2k} A_2 - (A_2^\top P_{2k} B_2)(R + B_2^\top P_{2k} B_2)^{-1}(B_2^\top P_{2k}A_2) + Q_2
+  \\
+  P_{12,k-1} &= A_2^\top P_{12,k} A_{12} + A_{12}^\top P_{21,k} A_{1}
+\end{align}
+
+
+\section{Notes}
+Block diagonal and Block tridiagonal matrices have faster solutions for example
+\href{https://www.tandfonline.com/doi/pdf/10.1080/03081078908935044}{inverse}.
+  
+
+\def\localbib{\string~/wrk/group-bib/shared}
+\IfFileExists{\localbib.bib}{
+\bibliography{\localbib,main_filtered}}{
+\bibliography{main_filtered}}
+\bibliographystyle{plainnat}
+\end{document}
