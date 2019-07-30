@@ -1,9 +1,12 @@
-import numpy as np
 import warnings
 from itertools import starmap
+from functools import partial
+
+import numpy as np
+import scipy.linalg
+
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
-import scipy.linalg
 
 
 def lqr_control_pt(P_t1, A, B, R, x_t):
@@ -123,7 +126,8 @@ def quadrotor_linear_system(m=1,
            [0, 100]]
     return map(np.array, [A, B, Q, R, Q_T, T])
 
-def plot_solution(cost_fn, xs, us, Ts, axes=None, plot_fn=Axes.plot):
+def plot_solution(cost_fn, xs, us, Ts, axes=None,
+                  plot_fn=partial(Axes.plot, label='-')):
     costs = list(starmap(cost_fn, zip(xs[1:], us, Ts)))
     positions = np.array([x[0] for x in xs[1:]])
     velocities = np.array([x[1] for x in xs[1:]])

@@ -1,11 +1,13 @@
-from bdlqr.full import LinearSystem, quadrotor_linear_system, plot_solution
 from functools import partial
 from collections import namedtuple
+from operator import attrgetter
 
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 
+from bdlqr.full import LinearSystem, quadrotor_linear_system, plot_solution
+from bdlqr.diff_substr import diff_substr
 
 def solve_seq(self, y_0, x_0):
     """
@@ -212,11 +214,14 @@ if __name__ == '__main__':
     sepsys = sepsys_X0[:-2]
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
-    for solver in (solve_full, solve_seq, solve_admm):
+    solvers = (solve_full, solve_seq, solve_admm)
+    labels = map(attrgetter('__name__'), solvers)
+    short_labels = diff_substr(labels)
+    for solver, label in zip(solvers, short_labels):
         ys_full, xs_full, us_full = solver(slsys, y_0, x_0)
         fig = plot_solution(slsys.cost, ys_full, us_full, np.arange(1, slsys.T+1),
                             axes= None if fig is None else fig.axes,
-                            plot_fn=partial(Axes.plot, label=solver.__name__))
+                            plot_fn=partial(Axes.plot, label=label))
     if fig is not None:
         fig.show()
         plt.show()
