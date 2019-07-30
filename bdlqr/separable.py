@@ -198,7 +198,7 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                                         else u_t.T.dot(R).dot(u_t))
 
 
-def separable_linear_system_example():
+def quadrotor_square_example():
     A_y, Bᵥ, Q_y, _, Q_yT, T = quadrotor_linear_system()
     Aₓ, Bᵤ, _, R, _, T = quadrotor_linear_system()
     E = np.hstack((np.eye(Bᵥ.shape[1]),
@@ -208,8 +208,8 @@ def separable_linear_system_example():
     return Q_y, R, A_y, Bᵥ, Q_yT, E, Aₓ, Bᵤ, T, y_0, x_0
 
 
-if __name__ == '__main__':
-    sepsys_X0 = separable_linear_system_example()
+def plot_quadrotor_square_example():
+    sepsys_X0 = quadrotor_square_example()
     y_0, x_0 = sepsys_X0[-2:]
     sepsys = sepsys_X0[:-2]
     fig = None
@@ -226,5 +226,6 @@ if __name__ == '__main__':
         fig.show()
         plt.show()
 
-
+if __name__ == '__main__':
+    plot_quadrotor_square_example()
 
