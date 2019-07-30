@@ -70,8 +70,8 @@ class LinearSystem:
                                         if t >= self.T
                                         else u_t.T.dot(self.Rs[t]).dot(u_t))
 
-    def lqr_forward_pt(self, x_0, us=None):
-        xs = [x_0]
+    def lqr_forward_pt(self, x0, us=None):
+        xs = [x0]
         if us is None:
             us = np.random.rand(self.T)
         for t in range(self.T):
@@ -90,8 +90,8 @@ class LinearSystem:
             )
         return us
 
-    def solve(self, x_0):
-        if not x_0.shape[0] == self.A.shape[0]: raise ValueError()
+    def solve(self, x0):
+        if not x0.shape[0] == self.A.shape[0]: raise ValueError()
         P_t = self.Qs[-1]
         Ps = [P_t]
         Ks = []
@@ -102,7 +102,7 @@ class LinearSystem:
             Ks.insert(0, K_t)
 
         us = []
-        xs = [x_0]
+        xs = [x0]
         for t in range(self.T):
             us.append(-K_t.dot(xs[t]))
             xs.append(self.f(xs[t], us[t], t))
@@ -110,7 +110,7 @@ class LinearSystem:
 
 
 def quadrotor_linear_system(m=1,
-                            r_0=10,
+                            r0=10,
                             A = [[1, 1],
                                  [0, 1]],
                             Q = [[1, 0],
@@ -121,37 +121,41 @@ def quadrotor_linear_system(m=1,
     # x_t = [position; velocity]
     B = [[0],
          [1/m]]
-    R = [[r_0]]
+    R = [[r0]]
     Q_T = [[100, 0],
            [0, 100]]
-    return map(np.array, [A, B, Q, R, Q_T, T])
+    def plotables(xs, us, linsys):
+        costs = list(starmap(linsys.cost, zip(xs[1:], us, range(1, len(us)+1))))
+        return [("pos", np.array([x[0] for x in xs[1:]])),
+                ("vel", np.array([x[1] for x in xs[1:]])),
+                ("ctrl", np.array(us)),
+                ("cost", costs)]
+    x0 = np.array([-1, 0])
+    return [plotables, x0] + list(map(np.array, [A, B, Q, R, Q_T, T]))
 
-def plot_solution(cost_fn, xs, us, Ts, axes=None,
+
+def plot_solution(Ts, ylabel_ydata, axes=None,
                   plot_fn=partial(Axes.plot, label='-')):
-    costs = list(starmap(cost_fn, zip(xs[1:], us, Ts)))
-    positions = np.array([x[0] for x in xs[1:]])
-    velocities = np.array([x[1] for x in xs[1:]])
     if axes is None:
         print("Creating a new figure")
         fig = plt.figure()
         axes = fig.subplots(2,2).ravel().tolist()
         fig.subplots_adjust(wspace=0.32)
 
-    for ax, (ylabel, ydata) in zip(axes,
-                                   [("x[0]", positions),
-                                    ("x[1]", velocities),
-                                    ("u[0]", np.array(us)),
-                                    ("cost", costs)]):
+    for ax, (ylabel, ydata) in zip(axes, ylabel_ydata):
         plot_fn(ax, Ts, ydata)
         ax.set_ylabel(ylabel)
         ax.legend()
     return axes[0].figure
 
+
 def test_quadrotor_linear_system_plot():
     # plot cost, trajectory, control
-    quad = LinearSystem(*quadrotor_linear_system())
-    xs, us = quad.solve(np.array([-1, 0]))
-    fig = plot_solution(quad.cost, xs, us, np.arange(1, quad.T+1))
+    plotables, x0, *linsys = quadrotor_linear_system()
+    quad = LinearSystem(*linsys)
+    xs, us = quad.solve(x0)
+    ylabels_ydata = plotables(xs, us, linsys)
+    fig = plot_solution(np.arange(1, quad.T+1), ylabels_ydata)
     plt.show()
 
 
