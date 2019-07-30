@@ -128,10 +128,8 @@ def solve_admm(slsys, y0, x0, ε=1e-2, ρ=1, max_iter=10):
         #
         # minimize_v ∑ₜ yₜQₜyₜ + wₖₜᵀ(E xₖₜ - vₜ) + 0.5 ρ|E xₖₜ - vₜ|²
         # s.t.          yₜ₊₁ = Ay yₜ + Bv vₜ
-        # Let ṽₜ = [ vₜ]
-        #          [ 1 ]
-        # Rv = 0.5 ρ [I, - E xₖₜ + wₖₜ/ρ]ᵀ [ I, - E xₖₜ + wₖₜ/ρ  ]
-        # Bvh = [Bv, 0]
+        # Rᵥ = 0.5 ρ I
+        # Zᵥ = - E xₖₜ + wₖₜ/ρ
         sqrtRs = [np.hstack(( np.eye(vs[0].shape[0]), (- E.dot(x) + w/ρ).reshape(-1,1) ))
                   for x, w in zip(xs, ws)]
         Rsvh = [0.5 * ρ * sqrtR.T.dot(sqrtR)
@@ -163,6 +161,8 @@ def solve_admm(slsys, y0, x0, ε=1e-2, ρ=1, max_iter=10):
         x_sys   = LinearSystem(Axh, Buh, Qxs[:-1], R, Qxs[-1], T)
         xhs_new, us_new = x_sys.solve(x0h)
         xs_new = [xh[:-1] for xh in xhs_new]
+        ws_new = [w + ρ * (E.dot(x_new) - v_new)
+                  for w, x_new, v_new in zip(ws, xs_new, vs_new)]
 
         change = sum(np.linalg.norm(u - u_new)
                      for u, u_new in zip(us, us_new))
@@ -171,6 +171,7 @@ def solve_admm(slsys, y0, x0, ε=1e-2, ρ=1, max_iter=10):
         vs = vs_new
         xs = xs_new
         us = us_new
+        ws = ws_new
 
         if change < ε:
             break
