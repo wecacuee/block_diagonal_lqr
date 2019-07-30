@@ -1,5 +1,5 @@
 /.tox
 *.pyc
-/block_diagonal_lqr.egg-info/PKG-INFO
+block_diagonal_lqr.egg-info
 /tex/main.pdf
 /tex/nohup.out
