@@ -11,24 +11,6 @@ import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 
 
-def lqr_control_pt(P_t1, A, B, R, x_t):
-    u_t = np.linalg.solve(R + B.T.dot(P_t1).dot(B), B.T.dot(P_t1).dot(A).dot(x_t))
-    return u_t
-
-
-def lqr_value_pt(P_t1, A, B, Q, R, x_t, u_t=None):
-    if u_t is None:
-        u_t = lqr_control(P_t1, A, B, R, x_t)
-    P_t = Q + A.T.dot(P_t1).A + u_t.T.dot(R + B.T.dot(P_t1).dot(B)).u_t
-    return P_t
-
-
-def discrete_algebric_ricatti_eq(P_t1, A, B, Q, R):
-    x_u_proj = B.T.dot(P_t1).dot(A)
-    K_t = np.linalg.solve(R + B.T.dot(P_t1).dot(B), x_u_proj)
-    P_t = Q + A.T.dot(P_t1).dot(A) - x_u_proj.T.dot(K_t)
-    return P_t, K_t
-
 def affine_backpropagation(Q, s, R, z, A, B, P, o):
     """
     minimizeᵤ ∑ₜ uₜRₜuₜ + 2 zₜᵀ uₜ + xₜQₜxₜ + 2 sₜᵀ xₜ
@@ -62,10 +44,6 @@ def affine_backpropagation(Q, s, R, z, A, B, P, o):
     k = np.linalg.solve(G, z + B.T.dot(o))
     return P_new, o_new, K, k
 
-
-def lqr_value_control(P_t1, A, B, Q, R):
-    P_t, K_t = discrete_algebric_ricatti_eq(P_t1, A, B, Q, R)
-    return P_t, K_t
 
 def repeat_maybe_inf(a, T):
     return (repeat(a)
@@ -133,26 +111,6 @@ class LinearSystem:
         return (c + s for c, s in zip_longest( reversed(ctrl_costs),
                                                reversed(state_costs),
                                                fillvalue=0))
-
-    def lqr_forward_pt(self, x0, us=None):
-        xs = [x0]
-        if us is None:
-            us = np.random.rand(self.T)
-        for t in range(self.T):
-            xs.append(self.f(xs[t], us[t]))
-
-        return xs, us
-
-    def lqr_backward_pt(self, xs, us):
-        Ps = [self.Q_T]
-        for t in range(self.T-1, 0, -1):
-            us[t] = lqr_control(Ps[0], self.A, self.B, self.Rs_rev[t], xs[t])
-            Ps.insert(
-                0,
-                lqr_value(Ps[0], self.A, self.B, self.Qs_rev[t], self.Rs_rev[t],
-                          xs[t], us[t])
-            )
-        return us
 
     def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-4):
         if not x0.shape[0] == self.A.shape[0]: raise ValueError()

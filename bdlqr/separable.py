@@ -58,9 +58,13 @@ def solve_seq(slsys, y0, x0, traj_len):
                          Qsx[-1], np.zeros(Qsx[-1].shape[0]), T)
     xhs, us = x_sys.solve(x0h, traj_len)
     xs = [xh[:-1] for xh in xhs]
-    assert xs[0].shape[0] == x0.shape[0]
-    assert ys[0].shape[0] == y0.shape[0]
-    assert us[0].shape[0] == Bu.shape[1]
+
+    # Generate forward trajectory
+    vs = [E.dot(xt) for xt in xs]
+    ys = [y0]
+    for t, vt in enumerate(vs):
+        yt = y_sys.f(ys[-1], vt, t)
+        ys.append(yt)
     return ys, xs, us
 
 
@@ -189,6 +193,16 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-2, ρ=1, max_iter=10):
         if change < ε:
             break
 
+    # Generate forward trajectory
+    xs = [x0]
+    for t, ut in enumerate(us):
+        xs.append(Ax.dot(xs[-1]) + Bu.dot(ut))
+
+    vs = [E.dot(xt) for xt in xs]
+    ys = [y0]
+    for t, vt in enumerate(vs):
+        ys.append(Ay.dot(ys[-1]) + Bv.dot(ut))
+
     return ys, xs, us
 
 
@@ -205,13 +219,21 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                     vₜ = E xₜ
                   xₜ₊₁ = Ax xₜ₊₁ + Bu uₜ
     """
-    def costs(self, xs, us):
+    def costs(self, ys, xs, us):
         Q = lambda t: self.QyT if t >= self.T else self.Qy
         R = self.R
-        return [x_t.T.dot(Q(t)).dot(x_t) + (0
-                                        if t >= self.T
-                                        else u_t.T.dot(R).dot(u_t))
-                for t, (x_t, u_t) in enumerate(zip_longest(xs, us))]
+        return [yt.T.dot(Q(t)).dot(yt) + (0
+                                          if ut is None
+                                          else ut.T.dot(R).dot(ut))
+                for t, (yt, ut) in enumerate(zip_longest(ys, us))]
+
+
+def plotables(ys, xs, us, linsys, traj_len):
+    costs = linsys.costs(ys, xs, us)[:traj_len]
+    return [("pos", np.array([y[0] for y in ys[:traj_len]])),
+            ("vel", np.array([x[0] for x in xs[:traj_len]])),
+            ("ctrl", np.array(us[:traj_len])),
+            ("cost", costs)]
 
 
 def quadrotor_square_example():
@@ -219,35 +241,22 @@ def quadrotor_square_example():
     _, x0, Ax, Bu, _, _, R, _, _, _, _ = quadrotor_linear_system()
     E = np.hstack((np.eye(Bv.shape[1]),
                    np.zeros((Bv.shape[1], Ax.shape[1] - Bv.shape[1]))))
-    def plotables(ys, xs, us, linsys, traj_len):
-        costs = linsys.costs(xs, us)[:traj_len]
-        return [("y[0]", np.array([x[0] for x in ys[:traj_len]])),
-                ("y[1]", np.array([x[0] for x in ys[:traj_len]])),
-                ("u[0]", np.array(us[:traj_len])),
-                ("cost", costs)]
-
     return plotables, y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, 100
 
 
 def quadrotor_as_separable(m=1,
-                           r0=10,
+                           r0=1,
                            Ay=[[1.]],
                            Bv=[[1.]],
                            E=[[1.]],
                            Qy=[[1]],
                            Ax=[[1.]],
-                           T=100):
+                           T=float('inf')):
     Bu=[[1/m]]
     R=[[r0]]
-    QyT = [[100]]
+    QyT = Qy
     y0 = np.array([-1])
     x0 = np.array([0])
-    def plotables(ys, xs, us, linsys, traj_len):
-        costs = linsys.costs(xs, us)[:traj_len]
-        return [("pos", np.array([y[0] for y in ys[:traj_len]])),
-                ("vel", np.array([x[0] for x in xs[:traj_len]])),
-                ("ctrl", np.array(us[:traj_len])),
-                ("cost", costs)]
     return [plotables] + list(map(np.array, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T)))
 
 
@@ -269,6 +278,5 @@ def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30):
         plt.show()
 
 if __name__ == '__main__':
-    plot_separable_sys_results()
     plot_separable_sys_results(example=quadrotor_as_separable)
 
