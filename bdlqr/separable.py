@@ -259,13 +259,13 @@ def quadrotor_square_example():
 
 
 def quadrotor_as_separable(m=1,
-                           r0=1,
+                           r0=10,
                            Ay=[[1.]],
                            Bv=[[1.]],
                            E=[[1.]],
                            Qy=[[1]],
                            Ax=[[1.]],
-                           T=float('inf')):
+                           T=40):
     Bu=[[1/m]]
     R=[[r0]]
     QyT = Qy
@@ -278,7 +278,7 @@ def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30):
     plotables, y0, x0, *sepsys = example()
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
-    solvers = (solve_full, solve_seq)
+    solvers = (solve_full, solve_seq, solve_admm)
     labels = map(attrgetter('__name__'), solvers)
     short_labels = diff_substr(labels)
     for solver, label in zip(solvers, short_labels):
