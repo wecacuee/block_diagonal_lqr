@@ -1,5 +1,6 @@
+import math
 from functools import partial
-from collections import namedtuple
+from collections import namedtuple, deque
 from operator import attrgetter
 from itertools import zip_longest
 from logging import getLogger, DEBUG, basicConfig
@@ -11,7 +12,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 
-from bdlqr.full import LinearSystem, quadrotor_linear_system, plot_solution
+from bdlqr.full import LinearSystem, quadrotor_linear_system, plot_solution,  affine_backpropagation
 from bdlqr.diff_substr import diff_substr
 
 
@@ -119,7 +120,7 @@ def solve_full(slsys, y0, x0, traj_len):
     return ys, xs, us
 
 
-def solve_admm(slsys, y0, x0, traj_len, ε=1e-2, ρ=1, max_iter=10):
+def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=10):
     """
     Solve the two minimizations alternatively:
 
@@ -130,42 +131,30 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-2, ρ=1, max_iter=10):
     s.t.          xₜ₊₁ = Ax xₜ₊₁ + Bu uₜ
 
     """
-    Qy  = slsys.Qy
+    Qy   = slsys.Qy
     R    = slsys.R
-    Ay  = slsys.Ay
+    Ay   = slsys.Ay
     Bv   = slsys.Bv
-    QyT = slsys.QyT
+    QyT  = slsys.QyT
     E    = slsys.E
     Ax   = slsys.Ax
     Bu   = slsys.Bu
     T    = slsys.T
-    ys, xs, us = solve_seq(slsys, y0, x0, traj_len)
-    vs = [E.dot(x) for x in xs[:-1]]
+    assert not math.isinf(T)
+    ys, xs, us = solve_seq(slsys, y0, x0, T)
+    vs = [E.dot(x) for x in xs]
     ws = [np.zeros(vs[0].shape[0]) for _ in range(len(vs))]
 
     for k in range(max_iter):
-        #
-        # minimize_v ∑ₜ yₜQₜyₜ + wₖₜᵀ(E xₖₜ - vₜ) + 0.5 ρ|E xₖₜ - vₜ|²
-        # s.t.          yₜ₊₁ = Ay yₜ + Bv vₜ
-        # Rᵥ = 0.5 ρ I
-        # zᵥ = 0.5 ρ ( - E xₖₜ + wₖₜ/ρ )
-        Rsv = [0.5 * ρ * np.eye(E.shape[0])
-               for _ in vs]
-        zsv = [0.5 * ρ * ( -E.dot(x) + w/ρ )
-               for x, w in zip(xs, ws)]
-
-        y_sys  = LinearSystem(Ay, Bv,
-                              Qy, np.zeros(Qy.shape[0]),
-                              Rsv, zsv,
-                              QyT, np.zeros(QyT.shape[0]), T)
-        ys_new, vs_new = y_sys.solve(y0, traj_len + 1)
-
+        ###
+        # ADMM Step 1: Find best us that generate vs
+        ###
         # Reformulate the affine to a linear system by making the state a
         # homogeneous vector
         # minimize_u ∑ₜ uₜRuₜ + wₖₜᵀ(E xₜ - vₖₜ) + 0.5 ρ|E xₜ - vₖₜ|²
         # s.t.          xₜ₊₁ = Ax xₜ₊₁ + Bu uₜ
-        # where Qxh = [  Eᵀ           ] [ E  -vₖₜ - wₖₜ/ρ]
-        #             [ -vₖₜᵀ - wₖₜᵀ/ρ]
+        # where Qxh = [  Eᵀ           ] [ E  -vₖₜ + wₖₜ/ρ]
+        #             [ -vₖₜᵀ + wₖₜᵀ/ρ]
         #  and  Axh = [ A   0 ]
         #             [ 0   1 ]
         #  and  Buh = [ Bu ]
@@ -173,19 +162,93 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-2, ρ=1, max_iter=10):
         #  and xhₜ =  [ xₜ ]
         #             [ 1  ]
         x0h    = np.hstack((x0, 1))
-        E_vs    = [np.hstack((E, (-v_new - w/ρ).reshape(-1,1)))
-                   for v_new, w in zip(vs_new, ws)]
-        Qxs    = [E_vt.T.dot(E_vt)    for E_vt in E_vs]
+        E_vs    = [np.hstack((E, (-v + w/ρ).reshape(-1,1)))
+                   for v, w in zip(vs, ws)]
+        Qxs    = [0.5 * ρ * E_vt.T.dot(E_vt)    for E_vt in E_vs]
         Axh     = np.eye(x0h.shape[0])
         Axh[:-1, :-1] = Ax
-        Buh     = np.vstack((Bu, 0))
-        x_sys   = LinearSystem(Axh, Buh,
-                               Qxs[:-1], np.zeros(Qxs[0].shape[0]),
-                               R, np.zeros(R.shape[0]),
-                               Qxs[-1], np.zeros(Qxs[-1].shape[0]),
-                               T)
-        xhs_new, us_new = x_sys.solve(x0h, traj_len)
+        Buh     = np.vstack((Bu, np.zeros((1, Bu.shape[1]))))
+        # x_sys   = LinearSystem(Axh, Buh,
+        #                        Qxs[:-1], np.zeros(Qxs[0].shape[0]),
+        #                        R, np.zeros(R.shape[0]),
+        #                        Qxs[-1], np.zeros(Qxs[-1].shape[0]),
+        #                        T)
+        # xhs_new, us_new, usmin = x_sys.solve(x0h, T, return_min=True)
+        Ps = deque([Qxs[T-1]])
+        Ks = deque([])
+        for t in reversed(range(T-1)):
+            Ptp1 = Ps[0]
+            # Kt = np.linalg.solve(R + Buh.T.dot(Ptp1).dot(Buh), Buh.T.dot(Ptp1).dot(Axh))
+            # Pt = Qxs[t] + Axh.T.dot(Ptp1).dot(Axh) - Axh.T.dot(Ptp1).dot(Buh).dot(Kt)
+            Pt, _, Kt, _ = affine_backpropagation(
+                Qxs[t], np.zeros(Qxs[t].shape[1]),
+                R, np.zeros(R.shape[1]),
+                Axh, Buh, Ps[0], np.zeros(Ps[0].shape[1]))
+            Ks.appendleft(Kt)
+            Ps.appendleft(Pt)
+        xhs_new = [x0h]
+        us_new = []
+        for t in range(T-1):
+            xt = xhs_new[t]
+            us_new.append(Ks[t].dot(xt))
+            ut = us_new[t]
+            xhs_new.append(Axh.dot(xt) + Buh.dot(ut))
+
+        usmin = x0h.T.dot(Ps[0]).dot(x0h)
+        LOG.debug("usmin: {:.03f}".format(usmin))
         xs_new = [xh[:-1] for xh in xhs_new]
+
+        ###
+        # ADMM Step 2: Find best vs that generate are close enough to E x
+        ###
+        # minimize_v ∑ₜ yₜQₜyₜ + wₖₜᵀ(E xₖₜ - vₜ) + 0.5 ρ|E xₖₜ - vₜ|²
+        # s.t.          yₜ₊₁ = Ay yₜ + Bv vₜ
+        # Rᵥ = 0.5 ρ I
+        # zᵥ = 0.5 ρ ( - E xₖₜ + wₖₜ/ρ )
+        Rsv = [0.5 * ρ * np.eye(E.shape[0])
+               for _ in vs]
+        zsv = [0.5 * ρ * ( -E.dot(x) + w/ρ )
+               for x, w in zip(xs_new, ws)]
+
+        # v0 is fixed because x0, v_{1:T} is unknown
+        v0 = E.dot(x0)
+        y1 = Ay.dot(y0) + Bv.dot(v0)
+
+        # y_sys  = LinearSystem(Ay, Bv,
+        #                       Qy, np.zeros(Qy.shape[0]),
+        #                       Rsv, zsv,
+        #                       QyT, np.zeros(QyT.shape[0]), T)
+        # ys_new, vs_new, vsmin = y_sys.solve(y1, T, return_min=True)
+        # ys_new.insert(0, y0)
+        # vs_new.insert(0, v0)
+        Ps = deque([QyT])
+        os = deque([np.zeros(QyT.shape[1])])
+        Ks = deque([])
+        ks = deque([])
+        for t in reversed(range(T)):
+            Ptp1 = Ps[0]
+            Pt, ot, Kt, kt = affine_backpropagation(
+                Qy, np.zeros(Qy.shape[1]),
+                Rsv[t], zsv[t],
+                Ay, Bv, Ps[0], np.zeros(Ps[0].shape[1]))
+            Ks.appendleft(Kt)
+            ks.appendleft(kt)
+            Ps.appendleft(Pt)
+            os.appendleft(ot)
+
+        ys_new = [y0, y1]
+        vs_new = [v0]
+        for t in range(1, T):
+            yt = ys_new[t]
+            vs_new.append(Ks[t].dot(yt) + ks[t])
+            vt = vs_new[t]
+            ys_new.append(Ay.dot(yt) + Bv.dot(vt))
+        vsmin = y1.T.dot(Ps[1]).dot(y1)
+        LOG.debug("vsmin: {:.03f}".format(vsmin))
+
+        ###
+        # ADMM Step 3: Update Lagrange parameters
+        ###
         ws_new = [w + ρ * (E.dot(x_new) - v_new)
                   for w, x_new, v_new in zip(ws, xs_new, vs_new)]
 
@@ -198,26 +261,21 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-2, ρ=1, max_iter=10):
         us = us_new
         ws = ws_new
 
-        cost = sum(yt.dot(Qy).dot(yt) + ut.dot(R).dot(ut)
-                    for yt, ut in zip(ys, us))
-        LOG.debug("cost {:.03f}".format(cost))
+        ys_f, xs_f =  slsys.forward(x0, y0, us)
+        cost_y = sum(y.dot(Qy).dot(y) for y in ys_f)
+        LOG.debug("y cost {:.03f}".format(cost_y))
+        cost_u = sum(u.dot(R).dot(u) for u in us)
+        LOG.debug("u cost {:.03f}".format(cost_u))
+        cost_vs = sum(np.linalg.norm(v - E.dot(x))
+                      for v, x in zip(vs, xs_f))
+        LOG.debug("const. cost {:.03f}".format(cost_vs))
         if change < ε:
             LOG.debug("change {:.03f} => Breaking".format(change))
             break
         else:
             LOG.debug("change {:.03f} => Continuing".format(change))
 
-    # Generate forward trajectory
-    xs = [x0]
-    for t, ut in enumerate(us):
-        xs.append(Ax.dot(xs[-1]) + Bu.dot(ut))
-
-    vs = [E.dot(xt) for xt in xs]
-    ys = [y0]
-    for t, vt in enumerate(vs):
-        ys.append(Ay.dot(ys[-1]) + Bv.dot(ut))
-
-    return ys, xs, us
+    return ys[:traj_len], xs[:traj_len], us[:traj_len]
 
 
 _SeparableLinearSystem = namedtuple('_SeparableLinearSystem',
@@ -233,6 +291,25 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                     vₜ = E xₜ
                   xₜ₊₁ = Ax xₜ₊₁ + Bu uₜ
     """
+    def forward(self, y0, x0, us):
+        # Generate forward trajectory
+        Ax = self.Ax
+        Bu = self.Bu
+        E  = self.E
+        Ay = self.Ay
+        Bv = self.Bv
+        xs = [x0]
+        for t, ut in enumerate(us):
+            xs.append(Ax.dot(xs[-1]) + Bu.dot(ut))
+
+        vs = [E.dot(xt) for xt in xs]
+        ys = [y0]
+        for t, vt in enumerate(vs):
+            ys.append(Ay.dot(ys[-1]) + Bv.dot(ut))
+
+        return ys, xs
+
+
     def costs(self, ys, xs, us):
         Q = lambda t: self.QyT if t >= self.T else self.Qy
         R = self.R

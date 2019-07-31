@@ -115,7 +115,7 @@ class LinearSystem:
                                                reversed(state_costs),
                                                fillvalue=0))
 
-    def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-6):
+    def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-6, return_min=False):
         if not x0.shape[0] == self.A.shape[0]: raise ValueError()
         P_t = self.Q_T
         traj_len = int(min(self.T, traj_len))
@@ -146,7 +146,9 @@ class LinearSystem:
             xs.append(self.f(xs[t], us[t], t))
             if t+1 < self.T:
                 us.append(-K.dot(xs[t+1]) - k)
-        return xs, us
+        return ((xs, us, x0.dot(Ps[0]).dot(x0))
+                if return_min
+                else (xs, us))
 
 
 def quadrotor_linear_system(m=1,
