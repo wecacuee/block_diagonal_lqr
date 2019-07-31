@@ -4,6 +4,9 @@ from itertools import starmap, repeat, zip_longest
 from functools import partial
 from collections import deque
 from operator import attrgetter
+from logging import getLogger, INFO, basicConfig
+basicConfig()
+LOG = getLogger(__name__)
 
 import numpy as np
 
@@ -47,8 +50,8 @@ def affine_backpropagation(Q, s, R, z, A, B, P, o):
 
 def repeat_maybe_inf(a, T):
     return (repeat(a)
-            if math.isinf(T)
-            else repeat(a, int(T)))
+            if math.isinf(T) or np.isinf(T)
+            else [a] * int(T))
 
 
 def _check_shape(name, X, shape_expected):
@@ -73,16 +76,16 @@ class LinearSystem:
         if not s_T.shape == (xD,): raise ValueError()
 
         _check_shape("Q", Q, (xD, xD))
-        Qs_rev = Q if isinstance(Q, list) else repeat_maybe_inf(Q, T)
+        Qs_rev = reversed(Q) if isinstance(Q, list) else repeat_maybe_inf(Q, T)
 
         _check_shape("s", s, (xD,))
-        ss_rev = s if isinstance(s, list) else repeat_maybe_inf(s, T)
+        ss_rev = reversed(s) if isinstance(s, list) else repeat_maybe_inf(s, T)
 
         _check_shape("R", R, (uD, uD))
-        Rs_rev = R if isinstance(R, list) else repeat_maybe_inf(R, T)
+        Rs_rev = reversed(R) if isinstance(R, list) else repeat_maybe_inf(R, T)
 
         _check_shape("z", z, (uD, ))
-        zs_rev = z if isinstance(z, list) else repeat_maybe_inf(z, T)
+        zs_rev = reversed(z) if isinstance(z, list) else repeat_maybe_inf(z, T)
 
         self.A = A
         self.B = B
@@ -102,17 +105,17 @@ class LinearSystem:
                 else A.dot(x_t) + B.dot(u_t))
 
     def costs(self, xs, us):
-        us_rev = reversed(us)
         ctrl_costs = [u_t.T.dot(R).dot(u_t) + 2 * z.T.dot(u_t)
-                      for u_t, R, z in zip(us_rev, self.Rs_rev, self.zs_rev)]
-        xs_rev = reversed(xs)
+                      for u_t, R, z in zip(reversed(us), self.Rs_rev, self.zs_rev)]
+        assert len(ctrl_costs) == len(us)
         state_costs = [x_t.T.dot(Q).dot(x_t) + 2 * s.dot(x_t)
-                       for x_t, Q, s in zip(xs_rev, self.Qs_rev, self.ss_rev)]
+                       for x_t, Q, s in zip(reversed(xs), self.Qs_rev, self.ss_rev)]
+        assert len(state_costs) == len(xs)
         return (c + s for c, s in zip_longest( reversed(ctrl_costs),
                                                reversed(state_costs),
                                                fillvalue=0))
 
-    def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-4):
+    def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-6):
         if not x0.shape[0] == self.A.shape[0]: raise ValueError()
         P_t = self.Q_T
         traj_len = int(min(self.T, traj_len))
@@ -126,10 +129,7 @@ class LinearSystem:
                                   self.Qs_rev, self.ss_rev,
                                   self.Rs_rev, self.zs_rev):
             P_t, o_t, K_t, k_t = affine_backpropagation(
-                Q, s, R, z, self.A, self.B, Ps[-1], os[-1])
-            if (np.linalg.norm(P_t[:] - Ps[-1][:])
-                + np.linalg.norm(o_t - os[-1]) < ε):
-                break
+                Q, s, R, z, self.A, self.B, Ps[0], os[0])
             Ps.appendleft(P_t)
             os.appendleft(o_t)
             Ks.appendleft(K_t)
@@ -177,7 +177,7 @@ def quadrotor_linear_system(m=1,
 def plot_solution(Ts, ylabel_ydata, axes=None,
                   plot_fn=partial(Axes.plot, label='-')):
     if axes is None:
-        print("Creating a new figure")
+        LOG.info("Creating a new figure")
         fig = plt.figure()
         axes = fig.subplots(2,2).ravel().tolist()
         fig.subplots_adjust(wspace=0.32)
@@ -189,12 +189,12 @@ def plot_solution(Ts, ylabel_ydata, axes=None,
     return axes[0].figure
 
 
-def test_quadrotor_linear_system_plot():
+def test_quadrotor_linear_system_plot(T=float('inf')):
     # plot cost, trajectory, control
     fig = None
     traj_len = 30
     for r0 in [1, 10, 100]:
-        plotables, x0, *linsys = quadrotor_linear_system(r0=r0)
+        plotables, x0, *linsys = quadrotor_linear_system(r0=r0, T=T)
         quad = LinearSystem(*linsys)
         xs, us = quad.solve(x0, traj_len)
         ylabels_ydata = plotables(xs, us, quad, traj_len)
@@ -207,3 +207,4 @@ def test_quadrotor_linear_system_plot():
 
 if __name__ == '__main__':
     test_quadrotor_linear_system_plot()
+    test_quadrotor_linear_system_plot(T=40)

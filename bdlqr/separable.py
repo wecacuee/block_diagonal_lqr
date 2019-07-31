@@ -2,6 +2,10 @@ from functools import partial
 from collections import namedtuple
 from operator import attrgetter
 from itertools import zip_longest
+from logging import getLogger, DEBUG, basicConfig
+basicConfig()
+LOG = getLogger(__name__)
+LOG.setLevel(DEBUG)
 
 import numpy as np
 import matplotlib.pyplot as plt
@@ -20,17 +24,21 @@ def solve_seq(slsys, y0, x0, traj_len):
     s.t.          xₜ₊₁ = Ax xₜ₊₁ + Bu uₜ
     """
     Qy  = slsys.Qy
-    R    = slsys.R
+    R   = slsys.R
     Ay  = slsys.Ay
-    Bv   = slsys.Bv
+    Bv  = slsys.Bv
     QyT = slsys.QyT
-    E    = slsys.E
-    Ax   = slsys.Ax
-    Bu   = slsys.Bu
-    T    = slsys.T
+    E   = slsys.E
+    Ax  = slsys.Ax
+    Bu  = slsys.Bu
+    T   = slsys.T
     y_sys = LinearSystem(Ay, Bv, Qy, np.zeros(Qy.shape[0]), R,
                          np.zeros(R.shape[0]), QyT, np.zeros(QyT.shape[0]), T)
-    ys, vs = y_sys.solve(y0, traj_len + 1)
+    v0 = E.dot(x0)
+    y1  = y_sys.f(y0, v0, 0)
+    ys, vs = y_sys.solve(y1, traj_len)
+    ys.insert(0, y0)
+    vs.insert(0, v0)
 
     # Reformulate the affine to a linear system by making the state a
     # homogeneous vector
@@ -48,7 +56,7 @@ def solve_seq(slsys, y0, x0, traj_len):
     E_vs = [np.hstack((E, -v.reshape(-1, 1)))
             for v in vs]
     Qsx = [E_vt.T.dot(E_vt)
-            for E_vt in E_vs]
+           for E_vt in E_vs]
     Axh = np.eye(x0h.shape[0])
     Axh[:-1, :-1] = Ax
     Buh = np.vstack((Bu, 0))
@@ -190,8 +198,14 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-2, ρ=1, max_iter=10):
         us = us_new
         ws = ws_new
 
+        cost = sum(yt.dot(Qy).dot(yt) + ut.dot(R).dot(ut)
+                    for yt, ut in zip(ys, us))
+        LOG.debug("cost {:.03f}".format(cost))
         if change < ε:
+            LOG.debug("change {:.03f} => Breaking".format(change))
             break
+        else:
+            LOG.debug("change {:.03f} => Continuing".format(change))
 
     # Generate forward trajectory
     xs = [x0]
@@ -264,7 +278,7 @@ def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30):
     plotables, y0, x0, *sepsys = example()
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
-    solvers = (solve_full, solve_seq, solve_admm)
+    solvers = (solve_full, solve_seq)
     labels = map(attrgetter('__name__'), solvers)
     short_labels = diff_substr(labels)
     for solver, label in zip(solvers, short_labels):
