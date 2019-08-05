@@ -213,7 +213,7 @@ def random_quadratic(xD = 1,
     return Q, s, R, u, A, B, c
 
 def test_quadratic(example=random_quadratic, ρ=0.1):
-    ex = example()
+    ex = list(example())
     LOG.info("Testing {}".format( ex ))
     qadmm = QuadraticADMM(*ex)
     xopt_admm, zopt_admm, wopt_admm = qadmm.solve_admm(ρ=ρ)
