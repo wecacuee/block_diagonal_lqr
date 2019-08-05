@@ -1,9 +1,9 @@
 import doctest
 from functools import partial
-from logging import basicConfig, getLogger, DEBUG
+from logging import basicConfig, getLogger, DEBUG, INFO
 basicConfig()
 LOG = getLogger(__name__)
-LOG.setLevel(DEBUG)
+LOG.setLevel(INFO)
 
 import numpy as np
 
@@ -210,11 +210,12 @@ def random_quadratic(xD = 1,
     A = np.eye(xD) # np.random.rand(cD, xD)
     B = -np.eye(xD) # np.random.rand(cD, zD)
     c = np.zeros(xD) # np.random.rand(cD)
-    LOG.info("{}".format( (Q, s, R, u, A, B, c)))
     return Q, s, R, u, A, B, c
 
 def test_quadratic(example=random_quadratic, ρ=0.1):
-    qadmm = QuadraticADMM(*example())
+    ex = example()
+    LOG.info("Testing {}".format( ex ))
+    qadmm = QuadraticADMM(*ex)
     xopt_admm, zopt_admm, wopt_admm = qadmm.solve_admm(ρ=ρ)
     xopt, zopt, wopt = qadmm.solve(ρ=ρ)
     thresh = 1e-2
