@@ -4,9 +4,10 @@ from itertools import starmap, repeat, zip_longest
 from functools import partial
 from collections import deque
 from operator import attrgetter
-from logging import getLogger, INFO, basicConfig
+from logging import getLogger, DEBUG, INFO, basicConfig
 basicConfig()
 LOG = getLogger(__name__)
+LOG.setLevel(DEBUG)
 
 import numpy as np
 
@@ -59,8 +60,8 @@ def _check_shape(name, X, shape_expected):
                 if isinstance(X, list)
                 else [X.shape])
     if any(s != shape_expected for s in shapes):
-        raise ValueError("Bad shape={} for {}. Expected {}".format(
-            s, name, shape_expected))
+        raise ValueError("Bad shape for {}. Expected {}".format(
+            name, shape_expected))
 
 class LinearSystem:
     """
@@ -76,16 +77,24 @@ class LinearSystem:
         if not s_T.shape == (xD,): raise ValueError()
 
         _check_shape("Q", Q, (xD, xD))
-        Qs_rev = reversed(Q) if isinstance(Q, list) else repeat_maybe_inf(Q, T)
+        Qs_rev = (list(reversed(Q))
+                  if isinstance(Q, list)
+                  else repeat_maybe_inf(Q, T))
 
         _check_shape("s", s, (xD,))
-        ss_rev = reversed(s) if isinstance(s, list) else repeat_maybe_inf(s, T)
+        ss_rev = (list(reversed(s))
+                  if isinstance(s, list)
+                  else repeat_maybe_inf(s, T))
 
         _check_shape("R", R, (uD, uD))
-        Rs_rev = reversed(R) if isinstance(R, list) else repeat_maybe_inf(R, T)
+        Rs_rev = (list(reversed(R))
+                  if isinstance(R, list)
+                  else repeat_maybe_inf(R, T))
 
         _check_shape("z", z, (uD, ))
-        zs_rev = reversed(z) if isinstance(z, list) else repeat_maybe_inf(z, T)
+        zs_rev = (list(reversed(z))
+                  if isinstance(z, list)
+                  else repeat_maybe_inf(z, T))
 
         self.A = A
         self.B = B
@@ -118,16 +127,17 @@ class LinearSystem:
     def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-6, return_min=False):
         if not x0.shape[0] == self.A.shape[0]: raise ValueError()
         P_t = self.Q_T
-        traj_len = int(min(self.T, traj_len))
-        Ps = deque([P_t], traj_len)
-        os = deque([self.s_T], traj_len)
-        Ks = deque([], traj_len)
-        ks = deque([], traj_len)
-        T = min(self.T, max_iter)
+        eff_traj_len = int(min(self.T, traj_len))
+        Ps = deque([P_t], eff_traj_len)
+        os = deque([self.s_T], eff_traj_len)
+        Ks = deque([], eff_traj_len)
+        ks = deque([], eff_traj_len)
+        max_iter_eff = max(traj_len, max_iter)
+        eff_iter = min(self.T, max_iter_eff)
         # backward
-        for t, Q, s, R, z in zip(reversed(range(T)),
-                                  self.Qs_rev, self.ss_rev,
-                                  self.Rs_rev, self.zs_rev):
+        for t, Q, s, R, z in zip(reversed(range(eff_iter)),
+                                 self.Qs_rev, self.ss_rev,
+                                 self.Rs_rev, self.zs_rev):
             P_t, o_t, K_t, k_t = affine_backpropagation(
                 Q, s, R, z, self.A, self.B, Ps[0], os[0])
             Ps.appendleft(P_t)
@@ -135,17 +145,19 @@ class LinearSystem:
             Ks.appendleft(K_t)
             ks.appendleft(k_t)
 
-        xs = [x0]
-        us = [-Ks[0].dot(xs[0]) - ks[0]]
         # forward
         if math.isinf(self.T):
             Ks = repeat(Ks[0])
             ks = repeat(ks[0])
 
-        for t, K, k in zip(range(traj_len), Ks, ks):
+        xs = [x0]
+        us = []
+        for t, K, k in zip(range(eff_traj_len), Ks, ks):
+            us.append(-K.dot(xs[t]) - k)
             xs.append(self.f(xs[t], us[t], t))
-            if t+1 < self.T:
-                us.append(-K.dot(xs[t+1]) - k)
+
+        assert len(us) == eff_traj_len
+        assert len(xs) == eff_traj_len + 1
         return ((xs, us, x0.dot(Ps[0]).dot(x0))
                 if return_min
                 else (xs, us))

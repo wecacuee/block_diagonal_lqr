@@ -10,8 +10,27 @@ import numpy as np
 from bdlqr.linalg import QuadraticFunction, AffineFunction
 
 
-def admm(proximals, dual_feasibility_check, objs, grads,
-         x0, z0, A, B, c, ρ, max_iter=100, thresh=1e-4):
+def admm_wk(xk, zk, const_fn, grads):
+    # Estimate wk for dual_feasibility_check
+    if grads:
+        assert isinstance(const_fn, AffineFunction)
+        A = const_fn.A[:, :xk.shape[0]]
+        B = const_fn.A[:, xk.shape[0]:]
+        wk, err, _,_ = np.linalg.lstsq(
+            np.vstack((A.T, B.T)),
+            - np.hstack((grads[0](xk),
+                         grads[1](zk))),
+            rcond=None)
+    else:
+        assert isinstance(const_fn, AffineFunction)
+        wk = np.zeros_like(const_fn.b)
+
+    return wk
+
+
+def admm(proximals, x0, z0, w0, const_fn, ρ,
+         dual_feasibility_check=None, objs=(), grads=(),
+         max_iter=100, thresh=1e-4):
     """
     Run admm for
 
@@ -25,27 +44,25 @@ def admm(proximals, dual_feasibility_check, objs, grads,
     """
     xk = x0
     zk = z0
-    const_fn = lambda x, z: A.dot(x) + B.dot(z) - c
-    # Estimate wk for dual_feasibility_check
-    wk, err, _,_ = np.linalg.lstsq(
-        np.vstack((A.T, B.T)),
-        - np.hstack((grads[0](xk),
-                     grads[1](zk))),
-        rcond=None)
+    wk = w0
+
     for k in range(max_iter):
-        #dual_feasibility_check(xk, zk, wk, err[0])
+        if dual_feasibility_check:
+            dual_feasibility_check(xk, zk, wk, err[0])
         xkp1 = proximals[0](xk, zk, wk, ρ)
         zkp1 = proximals[1](xkp1, zk, wk, ρ)
-        wk   = wk + ρ*(const_fn(xkp1, zkp1))
+        wk   = wk + ρ*const_fn(np.hstack((xkp1, zkp1)))
         if (np.linalg.norm(xk - xkp1)
             + np.linalg.norm(zk - zkp1)) < thresh:
             break
         xk = xkp1
         zk = zkp1
-        LOG.debug(" opt vals %0.03f, %0.03f", xk[0] , zk[0])
-        LOG.debug(" lagrange %0.03f", wk[0])
-        LOG.debug(" func vals %0.03f, %0.03f", objs[0](xk) , objs[1](zk))
-        LOG.debug(" constraint %0.03f", np.linalg.norm(const_fn(xk, zk)))
+        if LOG.level <= DEBUG:
+            LOG.debug(" opt vals %0.03f, %0.03f", xk[0] , zk[0])
+            LOG.debug(" lagrange %0.03f", wk[0])
+            LOG.debug(" func vals %0.03f, %0.03f", objs[0](xk) , objs[1](zk))
+            LOG.debug(" constraint %0.03f",
+                      np.linalg.norm(const_fn(np.hstack((xk, zk)))))
     return xk, zk, wk
 
 
@@ -166,11 +183,11 @@ class QuadraticADMM:
         c  = self.constraint.b
         x0 = self.obj_x.argmin()
         z0 = self.obj_z.argmin()
+        const_fn = AffineFunction(np.hstack((A,B)), c)
+        w0 = admm_wk(x0, z0, const_fn, (self.grad_f_x, self.grad_g_z))
         return admm((self.prox_fx, self.prox_gz),
-                    self.dual_feasibility_check,
-                    (self.obj_x, self.obj_z),
-                    (self.grad_f_x, self.grad_g_z),
-                    x0, z0, A, B, c, ρ)
+                    x0, z0, w0, const_fn, ρ,
+                    objs=(self.obj_x, self.obj_z))
 
     def grad_f_x(self, x):
         return self.obj_x.grad()(x)
