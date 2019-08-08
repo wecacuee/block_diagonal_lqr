@@ -1,3 +1,4 @@
+from abc import ABC, abstractmethod, abstractproperty
 import doctest
 from functools import partial
 from logging import basicConfig, getLogger, DEBUG
@@ -7,20 +8,145 @@ LOG.setLevel(DEBUG)
 
 import numpy as np
 
+class Func(ABC):
+    """
+    f: X ↦ Y
+    """
+    @abstractproperty
+    def domain_size(self):
+        """
+        f: X ↦ Y
 
-class QuadraticFunction:
+        If X = Rⁿ
+        return n
+        """
+        raise NotImplementedError()
+
+    @abstractproperty
+    def range_size(self):
+        """
+        f: X ↦ Y
+
+        If Y = Rᵐ
+        return m
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def __call__(self, x):
+        """
+        return f(x)
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def grad(self):
+        """
+        returns ∇ₓf
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def add(self, g):
+        """
+        Adds in the range while assuming same domain of f and g
+        r(x) = f(x) + g(x)
+
+        return r
+        """
+        raise NotImplementedError()
+
+    __add__ = add
+
+
+    @abstractmethod
+    def add_concat(self, g):
+        """
+        Adds in the range while concatenates in domain of f and g
+
+        r(x, z) = f(x) + g(z)
+
+        return r
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def concat_concat(self, g):
+        """
+        Concatenates range and domain of f and g
+
+        r(x, z) = [[f(x)],
+                   [g(z)]]
+
+        return r
+        """
+        raise NotImplementedError()
+
+    __and__ = concat_concat
+
+    @abstractmethod
+    def mul(self, g):
+        """
+        Multiplies in the range while assuming same domain of f and g
+        r(x) = f(x) * g(x)
+
+        return r
+        """
+        raise NotImplementedError()
+
+    __lmul__ = mul
+
+    @abstractmethod
+    def mul_concat(self, g):
+        """
+        Multiplies in the range while concatenates in domain of f and g
+
+        r(x, z) = f(x) * g(z)
+
+        return r
+        """
+        raise NotImplementedError()
+
+    @abstractmethod
+    def argmin(self):
+        """
+        return argminₓ f(x)
+        """
+        raise NotImplementedError()
+
+
+    @abstractmethod
+    def partial(self, vstart, vend, x0, w0):
+        """
+        For given x0, w0
+        r_xw(z) = f([x0, z, w0])
+
+        return r_xw
+        """
+        raise NotImplementedError()
+
+
+class ScalarQuadFunc(Func):
     """
     f: x ↦ R
     """
     def __init__(self, Q, l, c):
         """
         """
-        xD = Q.shape[0]
+        self._domain_size = xD = Q.shape[0]
         assert Q.shape == (xD, xD)
         assert l.shape == (xD, )
         self.Q = Q
         self.l = l
         self.c = c
+
+    @property
+    def domain_size(self):
+        return self._domain_size
+
+    @property
+    def range_size(self):
+        return 1
 
     def __call__(self, x):
         """
@@ -31,9 +157,30 @@ class QuadraticFunction:
         c = self.c
         return x.T.dot(Q).dot(x) + 2*l.T.dot(x) + c
 
+    @classmethod
+    def random(cls, xD=None):
+        if xD is None:
+            xD = np.random.randint(100)
+        return cls(np.random.rand(xD, xD),
+                   np.random.rand(xD),
+                   np.random.rand(1))
+
     def grad(self):
         """
         return f'
+
+        >>> f = ScalarQuadFunc.random()
+        >>> x = np.random.rand(f.domain_size)
+        >>> ε = 1e-12
+        >>> fx = f(x)
+        >>> gfx_numerical = np.zeros_like(x)
+        >>> for i in range(x.shape[0]):
+        ...     xpε = x.copy()
+        ...     xpε[i] = x[i] + ε
+        ...     gfx_numerical[i] = (f(xpε) - fx) / ε
+        >>> gfx = f.grad()(x)
+        >>> np.allclose(gfx, gfx_numerical, rtol=0.2)
+        True
         """
         return AffineFunction(2*self.Q, 2*self.l)
 
@@ -42,11 +189,17 @@ class QuadraticFunction:
         r(x) = f(x) + g(x)
 
         return r
+
+        >>> f = ScalarQuadFunc.random()
+        >>> g = ScalarQuadFunc.random(xD=f.domain_size)
+        >>> x = np.random.rand(f.domain_size)
+        >>> np.allclose((f + g)(x), f(x) + g(x))
+        True
         """
         Q = self.Q
         l = self.l
         c = self.c
-        if isinstance(other, QuadraticFunction):
+        if isinstance(other, ScalarQuadFunc):
             assert self.Q.shape == other.Q.shape
             assert self.l.shape == other.l.shape
             Qo = other.Q
@@ -58,19 +211,28 @@ class QuadraticFunction:
             co = other.b
         else:
             raise NotImplementedError("Unknown type for {}".format(other))
-        return QuadraticFunction(Q+Qo, l+lo, c+co)
+        return ScalarQuadFunc(Q+Qo, l+lo, c+co)
 
     __add__ = add
 
     def __getitem__(self, i):
         if not isinstance(i, slice):
             i = slice(i, i+1, 1)
-        return QuadraticFunction(self.Q[i, i], self.l[i], self.c)
+        return ScalarQuadFunc(self.Q[i, i], self.l[i], self.c)
 
     def add_concat(self, other):
         """
         r(x, z) = f(x) + g(z)
+
         return r
+
+        >>> f = ScalarQuadFunc.random()
+        >>> g = ScalarQuadFunc.random()
+        >>> r = f.add_concat(g)
+        >>> x = np.random.rand(f.domain_size)
+        >>> z = np.random.rand(g.domain_size)
+        >>> np.allclose(r(np.hstack((x, z))), f(x) + g(z))
+        True
         """
         Q = self.Q
         l = self.l
@@ -79,17 +241,15 @@ class QuadraticFunction:
         lo = other.l
         co = other.c
 
-        xD = l.shape[0]
-        oD = lo.shape[0]
+        xD = self.domain_size
+        oD = other.domain_size
         rD = xD + oD
         Qr = np.eye(rD)
         Qr[:xD, :xD] = Q
         Qr[xD:, xD:] = Qo
         lr = np.hstack((l, lo))
         cr = c + co
-        return QuadraticFunction(Qr, lr, cr)
-
-    __or__ = add_concat
+        return ScalarQuadFunc(Qr, lr, cr)
 
     def concat_concat(self, other):
         """
@@ -105,15 +265,32 @@ class QuadraticFunction:
     def argmin(self):
         """
          argmin_x f(x)
+
+        >>> f = ScalarQuadFunc.random()
+        >>> xopt = f.argmin()
+        >>> x = np.random.rand(f.domain_size)
+        >>> f(x) >= f(xopt)
+        array([ True])
         """
         return np.linalg.lstsq(self.Q, -self.l, rcond=None)[0]
 
 
     def partial(self, vstart, vend, x0, w0):
         """
-        r_w0z0(z) = f(x0, z, w0)
+        r_x0w0(z) = f(x0, z, w0)
 
-        return r_w0z0
+        return r_x0w0
+
+        >>> xD = np.random.randint(100)
+        >>> zD = np.random.randint(100)
+        >>> wD = np.random.randint(100)
+        >>> f = ScalarQuadFunc.random(xD=xD+zD+wD)
+        >>> x0 = np.random.rand(xD)
+        >>> w0 = np.random.rand(wD)
+        >>> r_x0w0 = f.partial(xD, xD+zD, x0, w0)
+        >>> z = np.random.rand(zD)
+        >>> np.allclose(r_x0w0(z), f(np.hstack((x0, z, w0))))
+        True
         """
         Q = self.Q
         l = self.l
@@ -146,32 +323,63 @@ class QuadraticFunction:
               + w0.T.dot(Qwx).dot(x0)
               + 2*lx.T.dot(x0)
               + 2*lw.T.dot(0))
-        return QuadraticFunction(Qr, lr, cr)
+        return ScalarQuadFunc(Qr, lr, cr)
 
     @classmethod
     def zero(cls, D):
         return cls(np.zeros((D,D)), np.zeros(D), 0)
 
-    def __lmul__(self, other):
+    def mul(self, other):
+        """
+        Multiplies in the range while assuming same domain of f and g
+        r(x) = f(x) * g(x)
+
+        return r
+
+        >>> f = ScalarQuadFunc.random()
+        >>> α = np.random.rand()
+        >>> r = f.mul(α)
+        >>> x = np.random.rand(f.domain_size)
+        >>> np.allclose(r(x), α * f(x))
+        True
+        """
         Q = self.Q
         l = self.l
         c = self.c
         if isinstance(other, float):
-            return QuadraticFunction(other * Q, other * l, other * c)
+            return ScalarQuadFunc(other * Q, other * l, other * c)
         else:
             raise NotImplementedError(other)
+
+    __lmul__ = mul
 
     def __rmul__(self, other):
         if isinstance(other, float):
             return self.__lmul__(other)
         raise NotImplementedError(other)
 
-    def __repr__(self):
-        return "QuadraticFunction({}, {}, {})".format(self.Q, self.l, self.c)
+    def mul_concat(self, g):
+        """
+        Multiplies in the range while concatenates in domain of f and g
 
-class AffineFunction:
+        r(x, z) = f(x) * g(z)
+
+        return r
+        """
+        raise NotImplementedError("... because multiplication of two quadratics is 4th order poly")
+
+    def __repr__(self):
+        return "ScalarQuadFunc({}, {}, {})".format(self.Q, self.l, self.c)
+
+
+class AffineFunction(Func):
+    """
+    f : X ↦ Y
+    f(x) = Ax + b
+    """
     def __init__(self, A, b):
         assert A.shape[0] == b.shape[0]
+        self._range_size, self._domain_size = A.shape
         self.A = A
         self.b = b
 
@@ -180,6 +388,17 @@ class AffineFunction:
         b = self.b
         return A.dot(x) + b
 
+    @property
+    def domain_size(self):
+        return self._domain_size
+
+    @property
+    def range_size(self):
+        return self._range_size
+
+    def argmin(self):
+        return np.max(np.abs(A), axis=0) * (-np.Inf)
+
     def grad(self):
         return A
 
@@ -187,20 +406,20 @@ class AffineFunction:
         """
         r(x, z) = f(x) + g(z)
         """
-        return AffineFunction(np.hstack((self.A, other.A)), self.b + other.b)
+        return type(self)(np.hstack((self.A, other.A)), self.b + other.b)
 
     def add(self, other):
         """
         r(x) = f(x) + g(x)
         """
-        return AffineFunction(self.A + other.A, self.b + other.b)
+        return type(self)(self.A + other.A, self.b + other.b)
 
     __add__ = add
 
     def __getitem__(self, i):
         if not isinstance(i, slice):
             i = slice(i, i+1, 1)
-        return AffineFunction(self.A[i, i], self.b[i])
+        return type(self)(self.A[i, i], self.b[i])
 
     def concat_concat(self, other):
         """
@@ -221,9 +440,7 @@ class AffineFunction:
         Ar[xD:, xD:] = Ao
 
         br = np.hstack((b, bo))
-        return AffineFunction(Ar, br)
-
-    __or__ = add_concat
+        return type(self)(Ar, br)
 
     __and__ = concat_concat
 
@@ -239,14 +456,17 @@ class AffineFunction:
             return AffineFunction(other.dot(A), other.dot(b))
         Ao = other.A
         bo = other.b
-        return QuadraticFunction(A.T.dot(Ao),
+        return ScalarQuadFunc(A.T.dot(Ao),
                                  b.T.dot(Ao) + bo.T.dot(A),
                                  b.T.dot(bo))
+
+    mul = dot
+
     def __lmul__(self, other):
         A = self.A
         b = self.b
         if isinstance(other, float):
-            return AffineFunction(other * A, other * b)
+            return type(self)(other * A, other * b)
 
     def __rmul__(self, other):
         if isinstance(other, float):
@@ -260,7 +480,7 @@ class AffineFunction:
         >>> f = AffineFunction(np.array([[1, -1]]), np.array([0]))
         >>> g = AffineFunction(np.array([[1.]]), np.array([0]))
         >>> r = f.mul_concat(g)
-        >>> isinstance(r, QuadraticFunction)
+        >>> isinstance(r, ScalarQuadFunc)
         True
         >>> r.Q
         array([[ 0. ,  0. ,  0.5],
@@ -284,7 +504,7 @@ class AffineFunction:
         Qr[xD:, :xD] = 0.5 * Ao.T.dot(A)
         lr = 0.5 * np.hstack((bo.T.dot(A), b.T.dot(Ao)))
         cr = b.T.dot(bo)
-        return QuadraticFunction(Qr, lr, cr)
+        return ScalarQuadFunc(Qr, lr, cr)
 
     def partial(self, vstart, vend, before, after):
         keep = slice(vstart, vend)
@@ -299,3 +519,6 @@ class AffineFunction:
     def __repr__(self):
         return "AffineFunction({}, {})".format(self.A, self.b)
 
+if __name__ == '__main__':
+    import doctest
+    doctest.testmod()

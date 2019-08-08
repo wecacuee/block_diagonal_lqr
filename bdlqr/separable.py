@@ -461,20 +461,20 @@ def quadrotor_square_example():
     return plotables, y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, 100
 
 
-def quadrotor_as_separable(m=1,
-                           r0=10,
-                           Ay=[[1.]],
-                           Bv=[[1.]],
-                           E=[[1.]],
-                           Qy=[[1]],
-                           Ax=[[1.]],
-                           T=40):
+def quadrotor_as_separable(m  = 1,
+                           r0 = 1,
+                           Ay = [[1.]],
+                           Bv = [[1.]],
+                           E  = [[1.]],
+                           Qy = [[1]],
+                           Ax = [[1.]],
+                           y0 = [-1],
+                           x0 = [0],
+                           T  = 3):
     Bu=[[1/m]]
     R=[[r0]]
-    QyT = Qy
-    y0 = np.array([-1])
-    x0 = np.array([0])
-    return [plotables] + list(map(np.array, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T)))
+    QyT = np.array(Qy)*100
+    return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T)))
 
 
 def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30):
@@ -484,10 +484,11 @@ def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30):
     solvers = (solve_full, solve_seq, solve_admm2)
     labels = map(attrgetter('__name__'), solvers)
     short_labels = diff_substr(labels)
+    eff_traj_len = min(slsys.T, traj_len)
     for solver, label in zip(solvers, short_labels):
-        ys_full, xs_full, us_full = solver(slsys, y0, x0, traj_len)
-        fig = plot_solution(np.arange(traj_len),
-                            plotables(ys_full, xs_full, us_full, slsys, traj_len),
+        ys_full, xs_full, us_full = solver(slsys, y0, x0, eff_traj_len)
+        fig = plot_solution(np.arange(eff_traj_len),
+                            plotables(ys_full, xs_full, us_full, slsys, eff_traj_len),
                             axes= None if fig is None else fig.axes,
                             plot_fn=partial(Axes.plot, label=label))
     if fig is not None:

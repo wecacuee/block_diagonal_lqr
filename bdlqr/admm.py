@@ -3,11 +3,11 @@ from functools import partial
 from logging import basicConfig, getLogger, DEBUG, INFO
 basicConfig()
 LOG = getLogger(__name__)
-LOG.setLevel(INFO)
+LOG.setLevel(DEBUG)
 
 import numpy as np
 
-from bdlqr.linalg import QuadraticFunction, AffineFunction
+from bdlqr.linalg import ScalarQuadFunc, AffineFunction
 
 
 def admm_wk(xk, zk, const_fn, grads):
@@ -58,11 +58,9 @@ def admm(proximals, x0, z0, w0, const_fn, ρ,
         xk = xkp1
         zk = zkp1
         if LOG.level <= DEBUG:
-            LOG.debug(" opt vals %0.03f, %0.03f", xk[0] , zk[0])
-            LOG.debug(" lagrange %0.03f", wk[0])
-            LOG.debug(" func vals %0.03f, %0.03f", objs[0](xk) , objs[1](zk))
-            LOG.debug(" constraint %0.03f",
-                      np.linalg.norm(const_fn(np.hstack((xk, zk)))))
+            LOG.debug(" xk[0]=%0.03f, zk[0]=%0.03f, wk[0]=%0.03f", xk[0] , zk[0], wk[0])
+            LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", objs[0](xk) , objs[1](zk))
+            LOG.debug(" (Ax+Bz-c)[0]=%0.03f", const_fn(np.hstack((xk, zk)))[0])
     return xk, zk, wk
 
 
@@ -73,14 +71,14 @@ class QuadraticADMM:
     s.t. Ax + Bz = c
     """
     def __init__(self, Q, s, R, u, A, B, c):
-        self.obj_x = QuadraticFunction(Q, s, 0)
-        self.obj_z =  QuadraticFunction(R, u, 0)
-        self.obj   = self.obj_x | self.obj_z
-        self.constraint = AffineFunction(A, -c) |  AffineFunction(B, np.zeros_like(c))
+        self.obj_x = ScalarQuadFunc(Q, s, 0)
+        self.obj_z =  ScalarQuadFunc(R, u, 0)
+        self.obj   = self.obj_x.add_concat(self.obj_z)
+        self.constraint = AffineFunction(np.hstack(([A, B])), -c)
 
     def augmented_lagrangian(self, ρ):
         wD = self.constraint.b.shape[0]
-        w_zeroq = QuadraticFunction.zero(wD)
+        w_zeroq = ScalarQuadFunc.zero(wD)
         w = AffineFunction(np.eye(wD), np.zeros(wD))
         penalty = 0.5 * ρ * self.constraint.dot(self.constraint)
         return (self.obj.add_concat(w_zeroq) +
@@ -229,15 +227,18 @@ def random_quadratic(xD = 1,
     c = np.zeros(xD) # np.random.rand(cD)
     return Q, s, R, u, A, B, c
 
-def test_quadratic(example=random_quadratic, ρ=0.1):
+
+def test_quadratic(example=random_quadratic,
+                   ρ=1.0,
+                   thresh = 1e-2):
     ex = list(example())
     LOG.info("Testing {}".format( ex ))
     qadmm = QuadraticADMM(*ex)
     xopt_admm, zopt_admm, wopt_admm = qadmm.solve_admm(ρ=ρ)
     xopt, zopt, wopt = qadmm.solve(ρ=ρ)
-    thresh = 1e-2
     assert np.linalg.norm(xopt - xopt_admm) < thresh
     assert np.linalg.norm(zopt - zopt_admm) < thresh
+
 
 def unit_quadratic():
     # f(x) = (x + 1)^2
@@ -271,7 +272,7 @@ test_custom_quadratic = partial(test_quadratic,
 if __name__ == '__main__':
     doctest.testmod()
     test_quadratic(example=unit_quadratic)
-    test_quadratic(example=custom_quadratic)
-    test_quadratic()
+    test_quadratic(example=custom_quadratic, ρ=1)
+    test_quadratic(ρ=1)
 
 
