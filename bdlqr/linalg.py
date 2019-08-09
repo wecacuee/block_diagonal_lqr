@@ -329,7 +329,7 @@ class ScalarQuadFunc(Func):
         >>> np.allclose(r(z), f(np.hstack((x0, z, w0))))
         True
         """
-        ptial = self._partial(vstart, vend)
+        ptial = self.partial_f(vstart, vend)
         x0w0 = np.hstack((x0, w0))
         Qr = ptial.Q
         lr = ptial.l(x0w0)
@@ -353,7 +353,7 @@ class ScalarQuadFunc(Func):
         >>> (f(np.hstack((x, z, w))) >= r(np.hstack((x, w)))).all()
         True
         """
-        ptial = self._partial(vstart, vend)
+        ptial = self.partial_f(vstart, vend)
         Q = ptial.Q
         l = ptial.l
         c = ptial.c
