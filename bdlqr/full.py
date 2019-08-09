@@ -14,6 +14,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 
+from bdlqr.linalg import ScalarQuadFunc, AffineFunction
+
 
 def affine_backpropagation(Q, s, R, z, A, B, P, o):
     """
@@ -46,6 +48,53 @@ def affine_backpropagation(Q, s, R, z, A, B, P, o):
     o_new = s + A.T.dot(o) - K.T.dot(z + B.T.dot(o))
     # Eq(4)
     k = np.linalg.solve(G, z + B.T.dot(o))
+    return P_new, o_new, K, k
+
+
+def affine_backpropagation2(Q, s, R, z, A, B, P, o):
+    """
+    minimizeᵤ uₜRₜuₜ + 2 zₜᵀ uₜ + xₜQₜxₜ + 2 sₜᵀ xₜ + xₜ₊₁ᵀ Pₜ₊₁ xₜ₊₁ + 2 oₜᵀxₜ₊₁
+    s.t.          xₜ₊₁ = A xₜ + B u
+
+    returns Pₜ, oₜᵀ, Kₜ, kₜ
+
+    >>> xD = np.random.randint(100)
+    >>> uD = np.random.randint(100)
+    >>> Qsqrt = np.random.rand(xD, xD)
+    >>> Q = Qsqrt.T.dot(Qsqrt)
+    >>> s = np.random.rand(xD)
+    >>> Rsqrt = np.random.rand(uD, uD)
+    >>> R = Rsqrt.T.dot(Rsqrt)
+    >>> z = np.random.rand(uD)
+    >>> A = np.random.rand(xD, xD)
+    >>> B = np.random.rand(xD, uD)
+    >>> Psqrt = np.random.rand(xD, xD)
+    >>> P = Psqrt.T.dot(Psqrt)
+    >>> o = np.random.rand(xD)
+    >>> P_, o_, K, k = affine_backpropagation2(Q, s, R, z, A, B, P, o)
+    >>> P2, o2, K2, k2 = affine_backpropagation(Q, s, R, z, A, B, P, o)
+    >>> np.allclose(P_, P2)
+    True
+    >>> np.allclose(o_, o2)
+    True
+    >>> np.allclose(K, K2)
+    True
+    >>> np.allclose(k, k2)
+    True
+    """
+    dynamics = AffineFunction(np.hstack((A, B)), np.zeros(A.shape[0]))
+    stage_cost = ScalarQuadFunc(Q, s, 0).add_concat(ScalarQuadFunc(R, z, 0))
+    terminal_cost = dynamics.dot(P * dynamics) + 2. * o * dynamics
+    cost = stage_cost + terminal_cost
+    xD = s.shape[0]
+    uD = z.shape[0]
+    cost_u = cost.partial_f(xD, xD+uD)
+    uopt = cost_u.argmin()
+    K = - uopt.A
+    k = - uopt.B
+    cost_opt = cost_u(uopt)
+    P_new = cost_opt.Q
+    o_new = cost_opt.l
     return P_new, o_new, K, k
 
 
@@ -220,5 +269,7 @@ def test_quadrotor_linear_system_plot(T=float('inf')):
 
 
 if __name__ == '__main__':
+    import doctest
+    doctest.testmod()
     test_quadrotor_linear_system_plot()
     test_quadrotor_linear_system_plot(T=40)

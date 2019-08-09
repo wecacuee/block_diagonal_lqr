@@ -3,7 +3,7 @@ from functools import partial
 from logging import basicConfig, getLogger, DEBUG, INFO
 basicConfig()
 LOG = getLogger(__name__)
-LOG.setLevel(DEBUG)
+LOG.setLevel(INFO)
 
 import numpy as np
 
@@ -23,7 +23,7 @@ def admm_wk(xk, zk, const_fn, grads):
             rcond=None)
     else:
         assert isinstance(const_fn, AffineFunction)
-        wk = np.zeros_like(const_fn.b)
+        wk = np.zeros_like(const_fn.B)
 
     return wk
 
@@ -77,7 +77,7 @@ class QuadraticADMM:
         self.constraint = AffineFunction(np.hstack(([A, B])), -c)
 
     def augmented_lagrangian(self, ρ):
-        wD = self.constraint.b.shape[0]
+        wD = self.constraint.B.shape[0]
         w_zeroq = ScalarQuadFunc.zero(wD)
         w = AffineFunction(np.eye(wD), np.zeros(wD))
         penalty = 0.5 * ρ * self.constraint.dot(self.constraint)
@@ -98,14 +98,14 @@ class QuadraticADMM:
     def eval_Lp_raw(self, x, z, w, ρ):
         xD = self.obj_x.l.shape[0]
         zD = self.obj_z.l.shape[0]
-        wD = self.constraint.b.shape[0]
+        wD = self.constraint.B.shape[0]
         Q = self.obj_x.Q
         s = self.obj_x.l
         R = self.obj_z.Q
         u = self.obj_z.l
         A = self.constraint.A[:, :xD]
         B = self.constraint.A[:, xD:]
-        c = self.constraint.b
+        c = self.constraint.B
         const = A.dot(x)+B.dot(z)-c
         Lp_val_raw = (x.T.dot(Q).dot(x)
                       , 2*s.T.dot(x)
@@ -178,7 +178,7 @@ class QuadraticADMM:
         xD = self.obj_x.l.shape[0]
         A  = self.constraint.A[:, :xD]
         B  = self.constraint.A[:, xD:]
-        c  = self.constraint.b
+        c  = self.constraint.B
         x0 = self.obj_x.argmin()
         z0 = self.obj_z.argmin()
         const_fn = AffineFunction(np.hstack((A,B)), c)

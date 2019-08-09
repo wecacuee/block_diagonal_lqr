@@ -23,7 +23,7 @@ class Func(ABC):
         raise NotImplementedError()
 
     @abstractproperty
-    def range_size(self):
+    def shape(self):
         """
         f: X ↦ Y
 
@@ -145,7 +145,7 @@ class ScalarQuadFunc(Func):
         return self._domain_size
 
     @property
-    def range_size(self):
+    def shape(self):
         return 1
 
     def __call__(self, x):
@@ -171,18 +171,18 @@ class ScalarQuadFunc(Func):
 
         >>> f = ScalarQuadFunc.random()
         >>> x = np.random.rand(f.domain_size)
-        >>> ε = 1e-12
         >>> fx = f(x)
+        >>> ε = 1e-12
         >>> gfx_numerical = np.zeros_like(x)
         >>> for i in range(x.shape[0]):
         ...     xpε = x.copy()
         ...     xpε[i] = x[i] + ε
         ...     gfx_numerical[i] = (f(xpε) - fx) / ε
         >>> gfx = f.grad()(x)
-        >>> np.allclose(gfx, gfx_numerical, rtol=0.2)
+        >>> np.allclose(gfx, gfx_numerical, rtol=0.1)
         True
         """
-        return AffineFunction(2*self.Q, 2*self.l)
+        return AffineFunction((self.Q + self.Q.T), 2*self.l)
 
     def add(self, other):
         """
@@ -208,7 +208,7 @@ class ScalarQuadFunc(Func):
         elif isinstance(other, AffineFunction):
             Qo = 0
             lo = 0.5 * other.A.reshape(-1)
-            co = other.b
+            co = other.B
         else:
             raise NotImplementedError("Unknown type for {}".format(other))
         return ScalarQuadFunc(Q+Qo, l+lo, c+co)
@@ -258,7 +258,7 @@ class ScalarQuadFunc(Func):
 
         return r
         """
-        raise NotImplementedError()
+        raise NotImplementedError(".. because it won't be scalar anymore")
 
     __and__ = concat_concat
 
@@ -269,29 +269,18 @@ class ScalarQuadFunc(Func):
         >>> f = ScalarQuadFunc.random()
         >>> xopt = f.argmin()
         >>> x = np.random.rand(f.domain_size)
-        >>> f(x) >= f(xopt)
-        array([ True])
-        """
-        return np.linalg.lstsq(self.Q, -self.l, rcond=None)[0]
-
-
-    def partial(self, vstart, vend, x0, w0):
-        """
-        r_x0w0(z) = f(x0, z, w0)
-
-        return r_x0w0
-
-        >>> xD = np.random.randint(100)
-        >>> zD = np.random.randint(100)
-        >>> wD = np.random.randint(100)
-        >>> f = ScalarQuadFunc.random(xD=xD+zD+wD)
-        >>> x0 = np.random.rand(xD)
-        >>> w0 = np.random.rand(wD)
-        >>> r_x0w0 = f.partial(xD, xD+zD, x0, w0)
-        >>> z = np.random.rand(zD)
-        >>> np.allclose(r_x0w0(z), f(np.hstack((x0, z, w0))))
+        >>> (f(x) >= f(xopt)).all()
         True
         """
+        if isinstance(self.Q, np.ndarray) and isinstance(self.l, np.ndarray):
+            return np.linalg.lstsq(self.Q, -self.l, rcond=None)[0]
+        else:
+            Q = self.Q
+            l = self.l
+            Qinv = np.linalg.pinv((Q + Q.T))
+            return - 2 * Qinv * l
+
+    def partial_f(self, vstart, vend):
         Q = self.Q
         l = self.l
         c = self.c
@@ -315,15 +304,63 @@ class ScalarQuadFunc(Func):
         #    + 2 lzᵀ z + 2x0ᵀQxz z + 2w0ᵀQwz z
         #    + c + x0ᵀQxx x0 + w0ᵀ Qww w0 + x0ᵀ Qxw w0 + w0ᵀ Qwx x0 + 2 lxᵀx0 + 2 lwᵀw0
         Qr = Qzz
-        lr = lz + Qxz.T.dot(x0) + Qwz.T.dot(w0)
-        cr = (c
-              + x0.T.dot(Qxx).dot(x0)
-              + w0.T.dot(Qww).dot(w0)
-              + x0.T.dot(Qxw).dot(w0)
-              + w0.T.dot(Qwx).dot(x0)
-              + 2*lx.T.dot(x0)
-              + 2*lw.T.dot(0))
+        lr = AffineFunction(np.hstack((0.5*(Qzx + Qxz.T), 0.5*(Qzw + Qwz.T))), lz)
+        cr = ScalarQuadFunc(np.vstack((np.hstack((Qxx, Qxw)),
+                                       np.hstack((Qwx, Qww)))),
+                            np.hstack((lx, lw)),
+                            c)
+
         return ScalarQuadFunc(Qr, lr, cr)
+
+    def partial(self, vstart, vend, x0, w0):
+        """
+        r_x0w0(z) = f([x0, z, w0])
+
+        return r
+
+        >>> xD = np.random.randint(100)
+        >>> zD = np.random.randint(100)
+        >>> wD = np.random.randint(100)
+        >>> f = ScalarQuadFunc.random(xD=xD+zD+wD)
+        >>> x0 = np.random.rand(xD)
+        >>> w0 = np.random.rand(wD)
+        >>> r = f.partial(xD, xD+zD, x0, w0)
+        >>> z = np.random.rand(zD)
+        >>> np.allclose(r(z), f(np.hstack((x0, z, w0))))
+        True
+        """
+        ptial = self._partial(vstart, vend)
+        x0w0 = np.hstack((x0, w0))
+        Qr = ptial.Q
+        lr = ptial.l(x0w0)
+        cr = ptial.c(x0w0)
+        return ScalarQuadFunc(Qr, lr, cr)
+
+    def partial_argmin(self, vstart, vend):
+        """
+        r([x, w]) = argmin_z f([x, z, w])
+
+        return r
+
+        >>> xD = np.random.randint(100)
+        >>> zD = np.random.randint(100)
+        >>> wD = np.random.randint(100)
+        >>> f = ScalarQuadFunc.random(xD=xD+zD+wD)
+        >>> r = f.partial_argmin(xD, xD+zD)
+        >>> x = np.random.rand(xD)
+        >>> w = np.random.rand(wD)
+        >>> z = np.random.rand(zD)
+        >>> (f(np.hstack((x, z, w))) >= r(np.hstack((x, w)))).all()
+        True
+        """
+        ptial = self._partial(vstart, vend)
+        Q = ptial.Q
+        l = ptial.l
+        c = ptial.c
+        Qinv = np.linalg.pinv(Q)
+        return -Qinv * l
+
+    __array_ufunc__ = None
 
     @classmethod
     def zero(cls, D):
@@ -346,17 +383,16 @@ class ScalarQuadFunc(Func):
         Q = self.Q
         l = self.l
         c = self.c
-        if isinstance(other, float):
+        if (isinstance(other, (float, int)) or
+            (isinstance(other, np.ndarray) and other.size == 1)):
             return ScalarQuadFunc(other * Q, other * l, other * c)
         else:
-            raise NotImplementedError(other)
+            raise NotImplementedError(type(other))
 
     __lmul__ = mul
 
     def __rmul__(self, other):
-        if isinstance(other, float):
-            return self.__lmul__(other)
-        raise NotImplementedError(other)
+        return self.__lmul__(other)
 
     def mul_concat(self, g):
         """
@@ -375,26 +411,30 @@ class ScalarQuadFunc(Func):
 class AffineFunction(Func):
     """
     f : X ↦ Y
-    f(x) = Ax + b
+    f(x) = AX + B
     """
-    def __init__(self, A, b):
-        assert A.shape[0] == b.shape[0]
-        self._range_size, self._domain_size = A.shape
+    def __init__(self, A, B):
+        self._domain_size = A.shape[-1]
+        self._range_shape = B.shape
         self.A = A
-        self.b = b
+        self.B = B
 
     def __call__(self, x):
         A = self.A
-        b = self.b
-        return A.dot(x) + b
+        B = self.B
+        return A.dot(x) + B
 
     @property
     def domain_size(self):
         return self._domain_size
 
     @property
-    def range_size(self):
-        return self._range_size
+    def shape(self):
+        return self._range_shape
+
+    @property
+    def T(self):
+        return self
 
     def argmin(self):
         return np.max(np.abs(A), axis=0) * (-np.Inf)
@@ -402,44 +442,81 @@ class AffineFunction(Func):
     def grad(self):
         return A
 
+    @classmethod
+    def random(cls, yD=None, xD=None):
+        if xD is None:
+            xD = np.random.randint(100)
+        if yD is None:
+            yD = (np.random.randint(100),)
+
+        return cls(np.random.rand(*yD, xD),
+                   np.random.rand(*yD))
+
     def add_concat(self, other):
         """
         r(x, z) = f(x) + g(z)
+
+        >>> f = AffineFunction.random()
+        >>> g = AffineFunction.random(yD=f.shape)
+        >>> r = f.add_concat(g)
+        >>> x = np.random.rand(f.domain_size)
+        >>> z = np.random.rand(g.domain_size)
+        >>> np.allclose(r(np.hstack((x, z))), f(x) + g(z))
+        True
         """
-        return type(self)(np.hstack((self.A, other.A)), self.b + other.b)
+        return type(self)(np.hstack((self.A, other.A)), self.B + other.B)
 
     def add(self, other):
         """
         r(x) = f(x) + g(x)
+
+        >>> f = AffineFunction.random()
+        >>> g = AffineFunction.random(xD=f.domain_size, yD=f.shape)
+        >>> r = f + g
+        >>> x = np.random.rand(f.domain_size)
+        >>> np.allclose(r(x), f(x) + g(x))
+        True
         """
-        return type(self)(self.A + other.A, self.b + other.b)
+        return type(self)(self.A + other.A, self.B + other.B)
 
     __add__ = add
 
     def __getitem__(self, i):
         if not isinstance(i, slice):
             i = slice(i, i+1, 1)
-        return type(self)(self.A[i, i], self.b[i])
+        return type(self)(self.A[i, i], self.B[i])
 
     def concat_concat(self, other):
         """
         r(x, z) = [f(x),
                    g(z)]
+
+        >>> f = AffineFunction.random()
+        >>> g = AffineFunction.random()
+        >>> r = f & g
+        >>> x = np.random.rand(f.domain_size)
+        >>> z = np.random.rand(g.domain_size)
+        >>> np.allclose(r(np.hstack((x, z))), np.hstack((f(x) , g(z))))
+        True
         """
         A = self.A
-        b = self.b
+        B = self.B
         Ao = other.A
-        bo = other.b
+        bo = other.B
 
-        xD = b.shape[0]
-        oD = bo.shape[0]
-        rD = xD + oD
+        xD = self.domain_size
+        oxD = other.domain_size
+        rxD = xD + oxD
 
-        Ar = np.eye(rD)
-        Ar[:xD, :xD] = A
-        Ar[xD:, xD:] = Ao
+        yD = self.shape[0]
+        oyD = other.shape[0]
+        ryD = yD + oyD
 
-        br = np.hstack((b, bo))
+        Ar = np.zeros((ryD, rxD))
+        Ar[:yD, ..., :xD] = A
+        Ar[yD:, ...,  xD:] = Ao
+
+        br = np.hstack((B.T, bo.T)).T
         return type(self)(Ar, br)
 
     __and__ = concat_concat
@@ -447,28 +524,40 @@ class AffineFunction(Func):
     def dot(self, other):
         """
         r(x) = f(x).T *g(x)
+
+        >>> f = AffineFunction.random()
+        >>> g = AffineFunction.random(xD=f.domain_size, yD=f.shape)
+        >>> x = np.random.rand(f.domain_size)
+        >>> np.allclose((f.dot(g))(x), f(x).T.dot(g(x)))
+        True
         """
         A = self.A
-        b = self.b
+        B = self.B
         if isinstance(other, np.ndarray):
             if other.ndim < 2:
                 other = other.reshape(1, -1)
-            return AffineFunction(other.dot(A), other.dot(b))
+            return AffineFunction(other.dot(A), other.dot(B))
         Ao = other.A
-        bo = other.b
+        bo = other.B
         return ScalarQuadFunc(A.T.dot(Ao),
-                                 b.T.dot(Ao) + bo.T.dot(A),
-                                 b.T.dot(bo))
+                              0.5*(B.T.dot(Ao) + bo.T.dot(A)),
+                              B.T.dot(bo))
 
     mul = dot
 
-    def __lmul__(self, other):
-        A = self.A
-        b = self.b
-        if isinstance(other, float):
-            return type(self)(other * A, other * b)
-
+    __array_ufunc__ = None
     def __rmul__(self, other):
+        A = self.A
+        B = self.B
+        if isinstance(other, float):
+            return type(self)(other * A, other * B)
+        elif isinstance(other, np.ndarray):
+            if not other.shape[-1] == self.shape[0]:
+                raise ValueError("Bad shape {}. expected {}".format(
+                    other.shape[-1], self.shape[0]))
+            return type(self)(other.dot(A), other.dot(B))
+
+    def __lmul__(self, other):
         if isinstance(other, float):
             return self.__lmul__(other)
         raise NotImplementedError()
@@ -490,11 +579,20 @@ class AffineFunction(Func):
         array([0., 0., 0.])
         >>> r.c
         0
+
+
+        >>> f = AffineFunction.random()
+        >>> g = AffineFunction.random(yD=f.shape)
+        >>> r = f.mul_concat(g)
+        >>> x = np.random.rand(f.domain_size)
+        >>> z = np.random.rand(g.domain_size)
+        >>> np.allclose(r(np.hstack((x, z))), f(x).T.dot(g(z)))
+        True
         """
         A = self.A
-        b = self.b
+        B = self.B
         Ao = other.A
-        bo = other.b
+        bo = other.B
 
         xD = A.shape[1]
         oD = Ao.shape[1]
@@ -502,22 +600,38 @@ class AffineFunction(Func):
         Qr = np.zeros((rD, rD))
         Qr[:xD, xD:] = 0.5 * A.T.dot(Ao)
         Qr[xD:, :xD] = 0.5 * Ao.T.dot(A)
-        lr = 0.5 * np.hstack((bo.T.dot(A), b.T.dot(Ao)))
-        cr = b.T.dot(bo)
+        lr = 0.5 * np.hstack((bo.T.dot(A), B.T.dot(Ao)))
+        cr = B.T.dot(bo)
         return ScalarQuadFunc(Qr, lr, cr)
 
     def partial(self, vstart, vend, before, after):
+        """
+        r_x0w0(z) = f(x0, z, w0)
+
+        return r_x0w0
+
+        >>> xD = np.random.randint(100)
+        >>> zD = np.random.randint(100)
+        >>> wD = np.random.randint(100)
+        >>> f = AffineFunction.random(xD=xD+zD+wD)
+        >>> x0 = np.random.rand(xD)
+        >>> w0 = np.random.rand(wD)
+        >>> r_x0w0 = f.partial(xD, xD+zD, x0, w0)
+        >>> z = np.random.rand(zD)
+        >>> np.allclose(r_x0w0(z), f(np.hstack((x0, z, w0))))
+        True
+        """
         keep = slice(vstart, vend)
         bef = slice(0, vstart)
         aft = slice(vend, None)
         A = self.A
-        b = self.b
+        B = self.B
         Ar = A[:, keep]
-        br = b + A[:, bef].dot(before) + A[:, aft].dot(after)
+        br = B + A[:, bef].dot(before) + A[:, aft].dot(after)
         return AffineFunction(Ar, br)
 
     def __repr__(self):
-        return "AffineFunction({}, {})".format(self.A, self.b)
+        return "AffineFunction({}, {})".format(self.A, self.B)
 
 if __name__ == '__main__':
     import doctest
