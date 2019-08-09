@@ -15,7 +15,7 @@ from matplotlib.axes import Axes
 from bdlqr.full import LinearSystem, quadrotor_linear_system, plot_solution,  affine_backpropagation
 from bdlqr.diff_substr import diff_substr
 from bdlqr.admm import admm
-from bdlqr.linalg import QuadraticFunction, AffineFunction
+from bdlqr.linalg import ScalarQuadFunc, AffineFunction
 
 
 def solve_seq(slsys, y0, x0, traj_len):
