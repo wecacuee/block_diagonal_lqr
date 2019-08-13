@@ -266,6 +266,14 @@ _SeparableLinearSystem = namedtuple('_SeparableLinearSystem',
                                     "Qy R Ay Bv QyT E Ax Bu T".split(" "))
 
 
+def randps(*dim, rng=np.random):
+    """
+    Random positive definite matrix?
+    """
+    Msqrt = rng.rand(*dim)
+    return Msqrt.T.dot(Msqrt)
+
+
 class SeparableLinearSystem(_SeparableLinearSystem):
     """
     Represents a linear system problem of the form:
@@ -275,6 +283,17 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                     vₜ = E xₜ
                   xₜ₊₁ = Ax xₜ₊₁ + Bu uₜ
     """
+    @classmethod
+    def random(cls, yD=1, vD=1, xD=1, uD=1, T=3, rng=np.random):
+        return cls(Qy  = randps(yD, yD, rng=rng),
+                   R   = randps(uD, uD, rng=rng),
+                   Ay  = rng.rand(yD, yD),
+                   Bv  = rng.rand(yD, uD),
+                   QyT = randps(yD, yD, rng=rng),
+                   E   = rng.rand(vD, xD),
+                   Ax  = rng.rand(xD, xD),
+                   Bu  = rng.rand(xD, uD),
+                   T   = T)
 
     def forward_x(self, x0, us):
         Ax = self.Ax
