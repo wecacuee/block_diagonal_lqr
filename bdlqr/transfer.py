@@ -1,6 +1,10 @@
 from collections import deque
 from functools import partial
 from itertools import zip_longest
+from logging import basicConfig, getLogger, INFO
+basicConfig()
+LOG = getLogger(__name__)
+LOG.setLevel(INFO)
 
 import numpy as np
 from numpy.linalg import norm
@@ -80,6 +84,7 @@ def proximal_cost_to_go(slsys, GV, ṽks, ρ):
     return ScalarQuadFunc(Pₜ, oₜ, 0)
 
     >>> seed = np.random.randint(10000)
+    >>> LOG.info("seed={}".format(seed))
     >>> rng = np.random.RandomState(seed)
     >>> slsys = SeparableLinearSystem.random(T=3, rng=rng)
     >>> yD = slsys.Ay.shape[-1]
@@ -95,8 +100,8 @@ def proximal_cost_to_go(slsys, GV, ṽks, ρ):
     >>> GV = independent_cost_to_go(slsys)
     >>> V = proximal_cost_to_go(slsys, GV, vks, ρ)
     >>> (V(y0) <= sum(yt.T.dot(slsys.Qy).dot(yt) +
-    ...              (0 if vkt is None else 0.5 * ρ * norm(vkt - slsys.E.dot(xt)))
-    ...              for yt, xt, vkt in zip_longest(ys, xs, vks))).all()
+    ...              0.5 * ρ * norm(vkt - slsys.E.dot(xt))
+    ...              for yt, xt, vkt in zip(ys, xs, vks))).all()
     True
     """
     n = len(ṽks)

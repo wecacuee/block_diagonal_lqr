@@ -63,6 +63,8 @@ def admm(proximals, x0, z0, w0, const_fn, ρ,
             LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", objs[0](xk) , objs[1](zk))
             LOG.debug(" |Ax+Bz-c|=%0.03f", norm(const_fn(np.hstack((xk, zk)))[0]))
         if change < thresh:
+            LOG.info("breaking after {} < {} iterations with change = {} < {}"
+                      .format(k, max_iter, change, thresh))
             break
     return xk, zk, wk
 
@@ -120,7 +122,7 @@ class QuadraticADMM:
 
     def eval_Lp(self, x, z, w, ρ):
         """
-        >>> qadmm = QuadraticADMM(*random_quadratic(xD=1, zD=1, cD=1))
+        >>> qadmm = QuadraticADMM(*random_bi_quadratic2(xD=1, zD=1, cD=1))
         >>> lp = sum(qadmm.eval_Lp(*map(np.array, (1, 0, 0, 1))))
         >>> lp_exp = sum(qadmm.eval_Lp_raw(*map(np.array, (1, 0, 0, 1))))
         >>> np.allclose(lp , lp_exp)
@@ -177,7 +179,7 @@ class QuadraticADMM:
         zD = self.obj_z.l.shape[0]
         return quad_xyw.partial(xD, xD+zD, x, np.array([])).argmin()
 
-    def solve_admm(self, ρ=0.1):
+    def solve_admm(self, ρ=0.1, max_iter=100, thresh=1e-4):
         xD = self.obj_x.l.shape[0]
         A  = self.constraint.A[:, :xD]
         B  = self.constraint.A[:, xD:]
@@ -188,7 +190,8 @@ class QuadraticADMM:
         w0 = admm_wk(x0, z0, const_fn, (self.grad_f_x, self.grad_g_z))
         return admm((self.prox_fx, self.prox_gz),
                     x0, z0, w0, const_fn, ρ,
-                    objs=(self.obj_x, self.obj_z))
+                    objs=(self.obj_x, self.obj_z),
+                    max_iter=max_iter, thresh=thresh)
 
     def grad_f_x(self, x):
         return self.obj_x.grad()(x)
@@ -214,7 +217,7 @@ class QuadraticADMM:
         return xzwopt[:xD], xzwopt[xD:xD+zD], xzwopt[xD+zD:]
 
 
-def random_quadratic(xD = 1,
+def random_bi_quadratic2(xD = 1,
                      zD = 1,
                      cD = 1,
                      xopt = -1,
@@ -231,19 +234,36 @@ def random_quadratic(xD = 1,
     return Q, s, R, u, A, B, c
 
 
-def test_quadratic(example=random_quadratic,
+def random_bi_quadratic(maxD=100, rng=np.random):
+    quad1 = ScalarQuadFunc.randomps(rng=rng, xD=rng.randint(1, maxD))
+    quad2 = ScalarQuadFunc.randomps(rng=rng, xD=rng.randint(1, maxD))
+    cD = rng.randint(1, maxD)
+    A = rng.rand(cD, quad1.domain_size)
+    B = rng.rand(cD, quad2.domain_size)
+    c = rng.rand(cD)
+    return quad1.Q, quad1.l, quad2.Q, quad2.l, A, B, c
+
+
+def test_quadratic(example=random_bi_quadratic,
                    ρ=1.0,
+                   seed=None,
                    thresh = 1e-2):
-    ex = list(example())
+    if seed is None:
+        seed = np.random.randint(1000000)
+    LOG.info("seed = {}".format(seed))
+    rng = np.random.RandomState(seed)
+    ex = list(example(rng=rng))
     LOG.info("Testing {}".format( ex ))
     qadmm = QuadraticADMM(*ex)
-    xopt_admm, zopt_admm, wopt_admm = qadmm.solve_admm(ρ=ρ)
+    xopt_admm, zopt_admm, wopt_admm = qadmm.solve_admm(
+        ρ=ρ,
+        max_iter=10000)
     xopt, zopt, wopt = qadmm.solve(ρ=ρ)
-    assert np.linalg.norm(xopt - xopt_admm) < thresh
-    assert np.linalg.norm(zopt - zopt_admm) < thresh
+    assert np.allclose(xopt, xopt_admm, atol=thresh, rtol=thresh)
+    assert np.allclose(zopt, zopt_admm, atol=thresh, rtol=thresh)
 
 
-def unit_quadratic():
+def unit_quadratic(rng=None):
     # f(x) = (x + 1)^2
     # g(z) = (z - 1)^2
     Q = [[1]]
@@ -256,7 +276,7 @@ def unit_quadratic():
     return map(np.array, (Q, s, R, u, A, B, c))
 
 
-def custom_quadratic():
+def custom_quadratic(rng=None):
     # f(x) = (x + 1)^2
     # g(z) = (z - 1)^2
     Q = [[0.25]]

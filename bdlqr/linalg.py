@@ -158,12 +158,20 @@ class ScalarQuadFunc(Func):
         return x.T.dot(Q).dot(x) + 2*l.T.dot(x) + c
 
     @classmethod
-    def random(cls, xD=None):
+    def random(cls, xD=None, rng=np.random):
         if xD is None:
-            xD = np.random.randint(100)
-        return cls(np.random.rand(xD, xD),
-                   np.random.rand(xD),
-                   np.random.rand(1))
+            xD = rng.randint(100)
+        return cls(rng.rand(xD, xD),
+                   rng.rand(xD),
+                   rng.rand(1))
+
+    @classmethod
+    def randomps(cls, xD=None, rng=np.random):
+        if xD is None:
+            xD = rng.randint(100)
+        return cls(randps(xD),
+                   rng.rand(xD),
+                   rng.rand(1))
 
     def grad(self):
         """
@@ -632,6 +640,14 @@ class AffineFunction(Func):
 
     def __repr__(self):
         return "AffineFunction({}, {})".format(self.A, self.B)
+
+
+def randps(D, rng=np.random):
+    """
+    Random positive definite square matrix?
+    """
+    Msqrt = np.eye(D) + rng.rand(D,D)
+    return Msqrt.T.dot(Msqrt)
 
 if __name__ == '__main__':
     import doctest
