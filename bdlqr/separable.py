@@ -164,9 +164,6 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=100):
 
     cost_y = slsys.cost_v(y0, vs0)
     cost_u = slsys.cost_u(us0)
-    LOG.debug(" xk[0]=%0.03f, zk[0]=%0.03f, wk[0]=%0.03f", vs0[0] , us0[0], ws0[0])
-    LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", cost_y , cost_u)
-    LOG.debug(" |Ax+Bz-c|=%0.03f", norm(slsys.constraint_fn(y0, x0, np.hstack((vs0, us0)))[0]))
     vs, us, ws = admm((partial(slsys.prox_f_v, y0, x0),
                        partial(slsys.prox_g_u, y0, x0)),
                       vs0, us0, ws0,
@@ -382,7 +379,7 @@ def quadrotor_as_separable(m  = 1,
 
 
 def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30,
-                               solvers=(solve_full, solve_seq, solve_admm, solve_admm2),
+                               solvers=(solve_full, solve_seq, solve_admm),
                                line_specs='b.- g,-- ro cv m^ y< k>'.split()):
     plotables, y0, x0, *sepsys = example(r0=10)
     fig = None
@@ -404,7 +401,7 @@ def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30,
         plt.show()
 
 
-def test_solvers_with_full(seed=None, solvers=[solve_admm2]):
+def test_solvers_with_full(seed=None, solvers=[solve_admm]):
     rng = np.random.RandomState(seed=seed)
     yD, vD, xD, uD, T = rng.randint(1, 100, size=5)
     slsys = SeparableLinearSystem.random(yD=yD, vD=vD, xD=xD, uD=uD, T=T)
