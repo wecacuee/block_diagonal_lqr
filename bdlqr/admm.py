@@ -3,9 +3,10 @@ from functools import partial
 from logging import basicConfig, getLogger, DEBUG, INFO
 basicConfig()
 LOG = getLogger(__name__)
-LOG.setLevel(INFO)
+LOG.setLevel(DEBUG)
 
 import numpy as np
+from numpy.linalg import norm
 
 from bdlqr.linalg import ScalarQuadFunc, AffineFunction
 
@@ -50,17 +51,19 @@ def admm(proximals, x0, z0, w0, const_fn, ρ,
         if dual_feasibility_check:
             dual_feasibility_check(xk, zk, wk, err[0])
         xkp1 = proximals[0](xk, zk, wk, ρ)
+        LOG.debug(" xk[0]=%0.03f", xkp1[0])
         zkp1 = proximals[1](xkp1, zk, wk, ρ)
+        LOG.debug(" zk[0]=%0.03f", zkp1[0])
         wk   = wk + ρ*const_fn(np.hstack((xkp1, zkp1)))
-        if (np.linalg.norm(xk - xkp1)
-            + np.linalg.norm(zk - zkp1)) < thresh:
-            break
+        LOG.debug(" wk[0]=%0.03f", wk[0])
+        change = norm(xk - xkp1) + norm(zk - zkp1)
         xk = xkp1
         zk = zkp1
         if LOG.level <= DEBUG:
-            LOG.debug(" xk[0]=%0.03f, zk[0]=%0.03f, wk[0]=%0.03f", xk[0] , zk[0], wk[0])
             LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", objs[0](xk) , objs[1](zk))
-            LOG.debug(" (Ax+Bz-c)[0]=%0.03f", const_fn(np.hstack((xk, zk)))[0])
+            LOG.debug(" |Ax+Bz-c|=%0.03f", norm(const_fn(np.hstack((xk, zk)))[0]))
+        if change < thresh:
+            break
     return xk, zk, wk
 
 

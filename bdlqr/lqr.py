@@ -17,7 +17,7 @@ from matplotlib.axes import Axes
 from bdlqr.linalg import ScalarQuadFunc, AffineFunction
 
 
-def affine_backpropagation(Q, s, R, z, A, B, P, o):
+def affine_backpropagation(Q, s, R, z, A, B, P, o, γ=1):
     """
     minimizeᵤ ∑ₜ uₜRₜuₜ + 2 zₜᵀ uₜ + xₜQₜxₜ + 2 sₜᵀ xₜ
     s.t.          xₜ₊₁ = A xₜ₊₁ + B uₜ
@@ -40,6 +40,8 @@ def affine_backpropagation(Q, s, R, z, A, B, P, o):
     # (4) kₜ = (R + BᵀPₜ₊₁B)⁻¹(zₜ + Bᵀoₜ₊₁)
 
     # Eq(1)
+    P = γ*P
+    o = γ*o
     G = R + B.T.dot(P).dot(B)
     K = np.linalg.solve(G, B.T.dot(P).dot(A))
     # Eq(2)
@@ -51,7 +53,7 @@ def affine_backpropagation(Q, s, R, z, A, B, P, o):
     return P_new, o_new, K, k
 
 
-def affine_backpropagation2(Q, s, R, z, A, B, P, o):
+def affine_backpropagation2(Q, s, R, z, A, B, P, o, γ=1):
     """
     minimizeᵤ uₜRₜuₜ + 2 zₜᵀ uₜ + xₜQₜxₜ + 2 sₜᵀ xₜ + xₜ₊₁ᵀ Pₜ₊₁ xₜ₊₁ + 2 oₜᵀxₜ₊₁
     s.t.          xₜ₊₁ = A xₜ + B u
@@ -82,6 +84,8 @@ def affine_backpropagation2(Q, s, R, z, A, B, P, o):
     >>> np.allclose(k, k2)
     True
     """
+    P = γ*P
+    o = γ*o
     dynamics = AffineFunction(np.hstack((A, B)), np.zeros(A.shape[0]))
     stage_cost = ScalarQuadFunc(Q, s, 0).add_concat(ScalarQuadFunc(R, z, 0))
     terminal_cost = dynamics.dot(P * dynamics) + 2. * o * dynamics
@@ -120,7 +124,7 @@ class LinearSystem:
     minimizeᵤ ∑ₜ uₜRₜuₜ + 2 zₜᵀ uₜ + xₜ₊₁Qₜ₊₁xₜ₊₁ + 2 sₜ₊₁ᵀ xₜ₊₁
     s.t.          xₜ₊₁ = A xₜ₊₁ + B uₜ
     """
-    def __init__(self, A, B, Q, s, R, z, Q_T, s_T, T):
+    def __init__(self, A, B, Q, s, R, z, Q_T, s_T, T, γ=1.):
         xD = A.shape[1]
         uD = B.shape[1]
         if not A.shape == (xD, xD): raise ValueError()
@@ -156,6 +160,7 @@ class LinearSystem:
         self.s_T = s_T
         self.Rs_rev = Rs_rev
         self.zs_rev = zs_rev
+        self.γ = γ
         self.T = T
 
     def f(self, x_t, u_t, t):
@@ -188,7 +193,7 @@ class LinearSystem:
                                  self.Qs_rev, self.ss_rev,
                                  self.Rs_rev, self.zs_rev):
             P_t, o_t, K_t, k_t = affine_backpropagation(
-                Q, s, R, z, self.A, self.B, Ps[0], os[0])
+                Q, s, R, z, self.A, self.B, Ps[0], os[0], γ=self.γ)
             Ps.appendleft(P_t)
             os.appendleft(o_t)
             Ks.appendleft(K_t)

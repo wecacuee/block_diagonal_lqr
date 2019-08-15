@@ -10,10 +10,11 @@ LOG = getLogger(__name__)
 LOG.setLevel(DEBUG)
 
 import numpy as np
+from numpy.linalg import norm
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
 
-from bdlqr.full import LinearSystem, quadrotor_linear_system, plot_solution,  affine_backpropagation
+from bdlqr.lqr import LinearSystem, quadrotor_linear_system, plot_solution,  affine_backpropagation
 from bdlqr.diff_substr import diff_substr
 from bdlqr.admm import admm
 from bdlqr.linalg import ScalarQuadFunc, AffineFunction
@@ -21,10 +22,10 @@ from bdlqr.linalg import ScalarQuadFunc, AffineFunction
 
 def solve_seq(slsys, y0, x0, traj_len):
     """
-    minimize_v ∑ₜ yₜQₜyₜ
+    v*_{1:T} = minimize_v ∑ₜ yₜQₜyₜ
     s.t.          yₜ₊₁ = Ay yₜ + Bv vₜ
 
-    minimize_u ∑ₜ uₜRuₜ + |E xₜ - vₜ|₂²
+    minimize_u ∑ₜ uₜRuₜ + |E xₜ - vₜ*|₂²
     s.t.          xₜ₊₁ = Ax xₜ₊₁ + Bu uₜ
     """
     Qy  = slsys.Qy
@@ -36,8 +37,10 @@ def solve_seq(slsys, y0, x0, traj_len):
     Ax  = slsys.Ax
     Bu  = slsys.Bu
     T   = slsys.T
-    y_sys = LinearSystem(Ay, Bv, Qy, np.zeros(Qy.shape[0]), R,
-                         np.zeros(R.shape[0]), QyT, np.zeros(QyT.shape[0]), T)
+
+    vD = Bv.shape[-1]
+    y_sys = LinearSystem(Ay, Bv, Qy, np.zeros(Qy.shape[0]), np.zeros((vD, vD)),
+                         np.zeros(vD), QyT, np.zeros(QyT.shape[0]), T)
     v0 = E.dot(x0)
     y1  = y_sys.f(y0, v0, 0)
     ys, vs = y_sys.solve(y1, traj_len)
@@ -63,7 +66,8 @@ def solve_seq(slsys, y0, x0, traj_len):
            for E_vt in E_vs]
     Axh = np.eye(x0h.shape[0])
     Axh[:-1, :-1] = Ax
-    Buh = np.vstack((Bu, 0))
+    uD = Bu.shape[-1]
+    Buh = np.vstack((Bu, np.zeros((1, uD))))
     x_sys = LinearSystem(Axh, Buh,
                          Qsx[:-1], np.zeros(Qsx[0].shape[0]),
                          R, np.zeros(R.shape[0]),
@@ -122,12 +126,24 @@ def solve_full(slsys, y0, x0, traj_len):
                           Q, np.zeros(Q.shape[0]),
                           R, np.zeros(R.shape[0]),
                           QT, np.zeros(QT.shape[0]), T).solve(X0, traj_len)
-    ys = [X[:y0.shape[0]] for X in Xs]
+    # x0 is input to the algorithm
     xs = [X[y0.shape[0]:] for X in Xs]
+
+    # y0 and y1 are predetermined so ignore the first time step
+    # but compute the last y
+    ys = [X[:y0.shape[0]] for X in Xs[1:]]
+    Ay = slsys.Ay
+    Bv = slsys.Bv
+    E  = slsys.E
+    ys.append(Ay.dot(ys[-1]) + Bv.dot(E).dot(xs[-1]))
+
+    assert len(ys) == traj_len
+    assert len(xs) == traj_len
+    assert len(us) == traj_len
     return ys, xs, us
 
 
-def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=10):
+def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=100):
     """
     Solve the two minimizations alternatively:
 
@@ -148,16 +164,46 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=10):
     Bu   = slsys.Bu
     T    = slsys.T
     assert not math.isinf(T)
-    ys, xs, us = solve_seq(slsys, y0, x0, T)
-    assert len(ys) == len(xs) == len(us)
-    vs = [E.dot(x) for x in xs]
-    assert len(vs) == len(us)
-    ws = [np.zeros(vt.shape[0]) for vt in vs]
-    assert len(ws) == len(us)
+    _, xs0, us_list = solve_seq(slsys, y0, x0, T)
+    us = np.vstack(us_list)
+    vs = np.vstack([E.dot(x) for x in xs0])
+    ws = np.vstack([np.zeros_like(vt) for vt in vs])
+
+    cost_y = slsys.cost_v(y0, vs)
+    cost_u = slsys.cost_u(us)
+    LOG.debug(" xk[0]=%0.03f, zk[0]=%0.03f, wk[0]=%0.03f", vs[0] , us[0], ws[0])
+    LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", cost_y , cost_u)
+    LOG.debug(" |Ax+Bz-c|=%0.03f", norm(slsys.constraint_fn(y0, x0, np.hstack((vs, us)))[0]))
 
     for k in range(max_iter):
         ###
-        # ADMM Step 1: Find best us that generate vs
+        # ADMM Step 1: Find best vs that generate are close enough to E x
+        ###
+        # minimize_v ∑ₜ yₜQₜyₜ + wₖₜᵀ(E xₖₜ - vₜ) + 0.5 ρ|E xₖₜ - vₜ|²
+        # s.t.          yₜ₊₁ = Ay yₜ + Bv vₜ
+        # Rᵥ = 0.5 ρ I
+        # zᵥ = 0.5 ρ ( - E xₖₜ + wₖₜ/ρ )
+        temp_xs = slsys.forward_x(x0, us)
+        Rsv = [0.5 * ρ * np.eye(E.shape[0])
+               for _ in vs]
+        zsv = [0.5 * ρ * ( -E.dot(x) - w/ρ )
+               for x, w in zip(temp_xs, ws)]
+
+        # v0 is fixed because x0, v_{1:T} is unknown
+        v0 = E.dot(x0)
+        y1 = Ay.dot(y0) + Bv.dot(v0)
+
+        y_sys  = LinearSystem(Ay, Bv,
+                              Qy, np.zeros(Qy.shape[0]),
+                              Rsv, zsv,
+                              QyT, np.zeros(QyT.shape[0]), len(us))
+        temp_ys_new, vs_new, vsmin = y_sys.solve(y1, len(us), return_min=True)
+        assert len(vs_new) == len(us)
+        vs_new = np.vstack(vs_new)
+        LOG.debug(" xk[0]=%0.03f", vs_new[0])
+
+        ###
+        # ADMM Step 2: Find best us that generate xs such that Ex is close to vs
         ###
         # Reformulate the affine to a linear system by making the state a
         # homogeneous vector
@@ -173,7 +219,7 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=10):
         #             [ 1  ]
         x0h    = np.hstack((x0, 1))
         E_vs   = [np.hstack((E, (-v + w/ρ).reshape(-1,1)))
-                   for v, w in zip(vs, ws)]
+                   for v, w in zip(vs_new, ws)]
         Qxs    = [0.5 * ρ * E_vt.T.dot(E_vt)    for E_vt in E_vs]
         Axh     = np.eye(x0h.shape[0])
         Axh[:-1, :-1] = Ax
@@ -185,66 +231,40 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=10):
                                len(vs))
         xhs_new, us_new, usmin = x_sys.solve(x0h, len(us), return_min=True)
         assert len(us_new) == len(us)
-        xs_new = [xh[:-1] for xh in xhs_new]
+        temp_xs_new = [xh[:-1] for xh in xhs_new]
+        us_new = np.vstack(us_new)
+        LOG.debug(" zk[0]=%0.03f", us_new[0])
 
-        ###
-        # ADMM Step 2: Find best vs that generate are close enough to E x
-        ###
-        # minimize_v ∑ₜ yₜQₜyₜ + wₖₜᵀ(E xₖₜ - vₜ) + 0.5 ρ|E xₖₜ - vₜ|²
-        # s.t.          yₜ₊₁ = Ay yₜ + Bv vₜ
-        # Rᵥ = 0.5 ρ I
-        # zᵥ = 0.5 ρ ( - E xₖₜ + wₖₜ/ρ )
-        Rsv = [0.5 * ρ * np.eye(E.shape[0])
-               for _ in vs]
-        zsv = [0.5 * ρ * ( -E.dot(x) - w/ρ )
-               for x, w in zip(xs_new, ws)]
-
-        # v0 is fixed because x0, v_{1:T} is unknown
-        v0 = E.dot(x0)
-        y1 = Ay.dot(y0) + Bv.dot(v0)
-
-        y_sys  = LinearSystem(Ay, Bv,
-                              Qy, np.zeros(Qy.shape[0]),
-                              Rsv, zsv,
-                              QyT, np.zeros(QyT.shape[0]), len(us))
-        ys_new, vs_new, vsmin = y_sys.solve(y1, len(us), return_min=True)
-        assert len(vs_new) == len(us)
-        #ys_new.insert(0, y0)
-        #vs_new.insert(0, v0)
 
         ###
         # ADMM Step 3: Update Lagrange parameters
         ###
-        ws_new = [w + ρ * (E.dot(x_new) - v_new)
-                  for w, x_new, v_new in zip(ws, xs_new, vs_new)]
+        vtilde_new = np.vstack([(E.dot(xt) - vt)
+                                for xt, vt in zip(temp_xs_new, vs_new)])
 
-        change = sum(np.linalg.norm(u - u_new)
-                     for u, u_new in zip(us, us_new))
+        ws_new = ws + ρ * vtilde_new
+        LOG.debug(" wk[0]=%0.03f", ws_new[0])
 
-        ys = ys_new
+        change = norm(us - us_new) + norm(vs - vs_new)
+
         vs = vs_new
-        xs = xs_new
         us = us_new
         ws = ws_new
 
-        ys_f, xs_f =  slsys.forward(x0, y0, us)
-        cost_y = sum(y.dot(Qy).dot(y) for y in ys_f)
-        LOG.debug("y cost {:.03f}".format(cost_y))
-        cost_u = sum(u.dot(R).dot(u) for u in us)
-        LOG.debug("u cost {:.03f}".format(cost_u))
-        cost_vs = sum(np.linalg.norm(v - E.dot(x))
-                      for v, x in zip(vs, xs_f))
-        LOG.debug("const. cost {:.03f}".format(cost_vs))
-        if change < ε:
-            LOG.debug("change {:.03f} => Breaking".format(change))
-            break
-        else:
-            LOG.debug("change {:.03f} => Continuing".format(change))
+        cost_y = slsys.cost_v(y0, vs)
+        cost_u = slsys.cost_u(us)
+        LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", cost_y , cost_u)
+        LOG.debug(" |Ax+Bz-c|=%0.03f", norm(slsys.constraint_fn(y0, x0, np.hstack((vs, us)))[0]))
 
+        if change < ε:
+            break
+
+    xs = temp_xs_new
+    ys = temp_ys_new
     return ys[:traj_len], xs[:traj_len], us[:traj_len]
 
 
-def solve_admm2(slsys, y0, x0, traj_len, ε=1e-4, ρ=0.1, max_iter=10):
+def solve_admm2(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=100):
     """
     Solve the two minimizations alternatively:
 
@@ -257,12 +277,26 @@ def solve_admm2(slsys, y0, x0, traj_len, ε=1e-4, ρ=0.1, max_iter=10):
     """
     warnings.warn("solve_admm2: This implementation does not provide good result. Use solve_admm instead")
     E = slsys.E
-    ys, xs0, us0 = solve_seq(slsys, y0, x0, traj_len)
-    vs0 = [E.dot(xt) for xt in xs0]
-    ws0 = [np.zeros_like(vt) for vt in vs0]
-    return admm((partial(slsys.prox_f_v, y0, x0),
-                 partial(slsys.prox_g_u, y0, x0)),
-                vs0, us0, ws0, partial(slsys.constraint_fn, y0, x0), ρ)
+    T = slsys.T
+    assert not math.isinf(T)
+    _, xs0, us0 = solve_seq(slsys, y0, x0, T)
+    us0 = np.vstack(us0)
+    vs0 = np.vstack([E.dot(xt) for xt in xs0])
+    ws0 = np.vstack([np.zeros_like(vt) for vt in vs0])
+
+    cost_y = slsys.cost_v(y0, vs0)
+    cost_u = slsys.cost_u(us0)
+    LOG.debug(" xk[0]=%0.03f, zk[0]=%0.03f, wk[0]=%0.03f", vs0[0] , us0[0], ws0[0])
+    LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", cost_y , cost_u)
+    LOG.debug(" |Ax+Bz-c|=%0.03f", norm(slsys.constraint_fn(y0, x0, np.hstack((vs0, us0)))[0]))
+    vs, us, ws = admm((partial(slsys.prox_f_v, y0, x0),
+                       partial(slsys.prox_g_u, y0, x0)),
+                      vs0, us0, ws0,
+                      partial(slsys.constraint_fn, y0, x0), ρ,
+                      objs=(partial(slsys.cost_v, y0), slsys.cost_u),
+                      max_iter=max_iter, thresh=ϵ)
+    ys, xs = slsys.forward(y0, x0, us)
+    return ys, xs, us
 
 
 _SeparableLinearSystem = namedtuple('_SeparableLinearSystem',
@@ -291,7 +325,7 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         return cls(Qy  = randps(yD, yD, rng=rng),
                    R   = randps(uD, uD, rng=rng),
                    Ay  = rng.rand(yD, yD),
-                   Bv  = rng.rand(yD, uD),
+                   Bv  = rng.rand(yD, vD),
                    QyT = randps(yD, yD, rng=rng),
                    E   = rng.rand(vD, xD),
                    Ax  = rng.rand(xD, xD),
@@ -324,6 +358,14 @@ class SeparableLinearSystem(_SeparableLinearSystem):
 
         return ys, xs
 
+    def cost_v(self, y0, vs):
+        Q = lambda t: self.QyT if t >= self.T else self.Qy
+        return sum(yt.T.dot(Q(t)).dot(yt)
+                   for t, yt in enumerate(self.forward_y(y0, vs)))
+
+    def cost_u(self, us):
+        R = self.R
+        return sum(ut.T.dot(R).dot(ut) for ut in us)
 
     def costs(self, ys, xs, us):
         Q = lambda t: self.QyT if t >= self.T else self.Qy
@@ -368,10 +410,10 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         Axh     = np.eye(x0h.shape[0])
         Axh[:-1, :-1] = Ax
         Buh     = np.vstack((Bu, np.zeros((1, Bu.shape[1]))))
-        x_sys   = LinearSystem(Axh,                    Buh,
-                               Qxs[:-1],                    np.zeros(Qxs[0].shape[0]),
-                               R,                      np.zeros(R.shape[0]),
-                               Qxs[-1], np.zeros(Qxs[-1].shape[0]),
+        x_sys   = LinearSystem(Axh,      Buh,
+                               Qxs[:-1], np.zeros(Qxs[0].shape[0]),
+                               R,        np.zeros(R.shape[0]),
+                               Qxs[-1],  np.zeros(Qxs[-1].shape[0]),
                                len(vs))
         xhs_new, us_new, usmin = x_sys.solve(x0h, len(vs), return_min=True)
         assert len(xhs_new) == len(vs)
@@ -394,7 +436,6 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         # Rᵥ = 0.5 ρ I
         # zᵥ = 0.5 ρ ( - E xₖₜ - wₖₜ/ρ )
         xs = self.forward_x(x0, us)
-        assert len(xs) == len(us)
         Rsv = [0.5 * ρ * np.eye(E.shape[0])
                for _ in xs]
         zsv = [0.5 * ρ * ( -E.dot(x) - w/ρ )
@@ -414,7 +455,7 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         return np.vstack(vs_new)
 
     def constraint_fn(self, y0, x0, vs_us):
-        vD = self.Bv.shape[0]
+        vD = self.Bv.shape[-1]
         vs = vs_us[:, :vD]
         us = vs_us[:, vD:]
 
@@ -462,24 +503,44 @@ def quadrotor_as_separable(m  = 1,
     return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T)))
 
 
-def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30):
-    plotables, y0, x0, *sepsys = example()
+def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30,
+                               solvers=(solve_full, solve_seq, solve_admm, solve_admm2),
+                               line_specs='b.- g,-- ro cv m^ y< k>'.split()):
+    plotables, y0, x0, *sepsys = example(r0=10)
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
-    solvers = (solve_full, solve_seq, solve_admm, solve_admm2)
     labels = map(attrgetter('__name__'), solvers)
     short_labels = diff_substr(labels)
     eff_traj_len = min(slsys.T, traj_len)
-    for solver, label in zip(solvers, short_labels):
+    for solver, label, lnfmt in zip(solvers, short_labels, line_specs):
         ys_full, xs_full, us_full = solver(slsys, y0, x0, eff_traj_len)
+        y1 = slsys.Ay.dot(y0) + slsys.Bv.dot(slsys.E).dot(x0)
+        ys_full = np.vstack((y0, y1, ys_full))
+        xs_full = np.vstack((x0, xs_full))
         fig = plot_solution(np.arange(eff_traj_len),
                             plotables(ys_full, xs_full, us_full, slsys, eff_traj_len),
                             axes= None if fig is None else fig.axes,
-                            plot_fn=partial(Axes.plot, label=label))
+                            plot_fn=lambda ax, x, y: Axes.plot(ax, x, y, lnfmt, label=label))
     if fig is not None:
         fig.show()
         plt.show()
 
+
+def test_solvers_with_full(seed=None, solvers=[solve_admm2]):
+    rng = np.random.RandomState(seed=seed)
+    yD, vD, xD, uD, T = rng.randint(1, 100, size=5)
+    slsys = SeparableLinearSystem.random(yD=yD, vD=vD, xD=xD, uD=uD, T=T)
+    y0 = rng.rand(yD)
+    x0 = rng.rand(xD)
+    ys_full, xs_full, us_full = solve_full(slsys, y0, x0, T)
+    for solver in solvers:
+        ys, xs, us = solver(slsys, y0, x0, T)
+        assert np.allclose(ys, ys_full, rtol=1e-6)
+        assert np.allclose(xs, xs_full, rtol=1e-6)
+        assert np.allclose(us, us_full, rtol=1e-6)
+
+
 if __name__ == '__main__':
+    #test_solvers_with_full()
     plot_separable_sys_results(example=quadrotor_as_separable)
 

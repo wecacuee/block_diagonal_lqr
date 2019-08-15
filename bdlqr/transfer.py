@@ -6,7 +6,7 @@ import numpy as np
 from numpy.linalg import norm
 from bdlqr.separable import SeparableLinearSystem, joint_linear_system, solve_seq
 from bdlqr.linalg import ScalarQuadFunc
-from bdlqr.full import affine_backpropagation
+from bdlqr.lqr import affine_backpropagation
 
 from scipy.optimize import fmin
 
