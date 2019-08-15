@@ -645,9 +645,12 @@ class AffineFunction(Func):
 def randps(D, rng=np.random):
     """
     Random positive definite square matrix?
+
+    https://math.stackexchange.com/questions/357980/how-to-generate-random-symmetric-positive-definite-matrices-using-matlab
     """
-    Msqrt = np.eye(D) + rng.rand(D,D)
-    return Msqrt.T.dot(Msqrt)
+    A = rng.rand(D,D)
+    Asym = 0.5 * (A + A.T)
+    return Asym + D*np.eye(D)
 
 if __name__ == '__main__':
     import doctest

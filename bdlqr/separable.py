@@ -145,7 +145,7 @@ def solve_full(slsys, y0, x0, traj_len):
     return ys, xs, us
 
 
-def solve_admm(slsys, y0, x0, traj_len, ε=1e-6, ρ=1, max_iter=10000):
+def solve_admm(slsys, y0, x0, traj_len, ε=1e-6, ρ=1, max_iter=5000):
     """
     Solve the two minimizations alternatively:
 
