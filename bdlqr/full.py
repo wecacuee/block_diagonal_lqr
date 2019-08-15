@@ -104,7 +104,10 @@ def repeat_maybe_inf(a, T):
             else [a] * int(T))
 
 
-def _check_shape(name, X, shape_expected):
+def _check_shape(name, X, shape_expected, listlen):
+    if isinstance(X, list) and len(X) != listlen:
+        raise ValueError("Bad length for {}. Expected {}".format(
+            name, listlen))
     shapes = (map(attrgetter('shape'), X)
                 if isinstance(X, list)
                 else [X.shape])
@@ -114,7 +117,7 @@ def _check_shape(name, X, shape_expected):
 
 class LinearSystem:
     """
-    minimizeᵤ ∑ₜ uₜRₜuₜ + 2 zₜᵀ uₜ + xₜQₜxₜ + 2 sₜᵀ xₜ
+    minimizeᵤ ∑ₜ uₜRₜuₜ + 2 zₜᵀ uₜ + xₜ₊₁Qₜ₊₁xₜ₊₁ + 2 sₜ₊₁ᵀ xₜ₊₁
     s.t.          xₜ₊₁ = A xₜ₊₁ + B uₜ
     """
     def __init__(self, A, B, Q, s, R, z, Q_T, s_T, T):
@@ -125,22 +128,22 @@ class LinearSystem:
         if not Q_T.shape == (xD, xD): raise ValueError()
         if not s_T.shape == (xD,): raise ValueError()
 
-        _check_shape("Q", Q, (xD, xD))
-        Qs_rev = (list(reversed(Q))
+        _check_shape("Q", Q, (xD, xD), T-1)
+        Qs_rev = (list(reversed(Q)) + [np.zeros_like(Q[0])]
                   if isinstance(Q, list)
                   else repeat_maybe_inf(Q, T))
 
-        _check_shape("s", s, (xD,))
-        ss_rev = (list(reversed(s))
+        _check_shape("s", s, (xD,), T-1)
+        ss_rev = (list(reversed(s)) + [np.zeros_like(s[0])]
                   if isinstance(s, list)
                   else repeat_maybe_inf(s, T))
 
-        _check_shape("R", R, (uD, uD))
+        _check_shape("R", R, (uD, uD), T)
         Rs_rev = (list(reversed(R))
                   if isinstance(R, list)
                   else repeat_maybe_inf(R, T))
 
-        _check_shape("z", z, (uD, ))
+        _check_shape("z", z, (uD, ), T)
         zs_rev = (list(reversed(z))
                   if isinstance(z, list)
                   else repeat_maybe_inf(z, T))
@@ -163,28 +166,25 @@ class LinearSystem:
                 else A.dot(x_t) + B.dot(u_t))
 
     def costs(self, xs, us):
-        ctrl_costs = [u_t.T.dot(R).dot(u_t) + 2 * z.T.dot(u_t)
+        ctrl_costs = [0] + [u_t.T.dot(R).dot(u_t) + 2 * z.T.dot(u_t)
                       for u_t, R, z in zip(reversed(us), self.Rs_rev, self.zs_rev)]
-        assert len(ctrl_costs) == len(us)
+        assert len(ctrl_costs) == len(us) + 1
         state_costs = [x_t.T.dot(Q).dot(x_t) + 2 * s.dot(x_t)
-                       for x_t, Q, s in zip(reversed(xs), self.Qs_rev, self.ss_rev)]
-        assert len(state_costs) == len(xs)
-        return (c + s for c, s in zip_longest( reversed(ctrl_costs),
-                                               reversed(state_costs),
-                                               fillvalue=0))
+                       for x_t, Q, s in zip(reversed(xs), self.Qs_rev, self.ss_rev)] + [0]
+        assert len(state_costs) == len(xs) + 1
+        return (c + s for c, s in zip( reversed(ctrl_costs),
+                                       reversed(state_costs) ))
 
     def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-6, return_min=False):
         if not x0.shape[0] == self.A.shape[0]: raise ValueError()
         P_t = self.Q_T
-        eff_traj_len = int(min(self.T, traj_len))
-        Ps = deque([P_t], eff_traj_len)
-        os = deque([self.s_T], eff_traj_len)
-        Ks = deque([], eff_traj_len)
-        ks = deque([], eff_traj_len)
-        max_iter_eff = max(traj_len, max_iter)
-        eff_iter = min(self.T, max_iter_eff)
+        eff_backprop = int(min(self.T, max_iter))
+        Ps = deque([P_t], eff_backprop)
+        os = deque([self.s_T], eff_backprop)
+        Ks = deque([], eff_backprop)
+        ks = deque([], eff_backprop)
         # backward
-        for t, Q, s, R, z in zip(reversed(range(eff_iter)),
+        for t, Q, s, R, z in zip(reversed(range(eff_backprop)),
                                  self.Qs_rev, self.ss_rev,
                                  self.Rs_rev, self.zs_rev):
             P_t, o_t, K_t, k_t = affine_backpropagation(
@@ -201,15 +201,16 @@ class LinearSystem:
 
         xs = [x0]
         us = []
+        eff_traj_len = min(self.T, traj_len)
         for t, K, k in zip(range(eff_traj_len), Ks, ks):
             us.append(-K.dot(xs[t]) - k)
             xs.append(self.f(xs[t], us[t], t))
 
         assert len(us) == eff_traj_len
-        assert len(xs) == eff_traj_len + 1
-        return ((xs, us, x0.dot(Ps[0]).dot(x0))
+        assert len(xs[1:]) == eff_traj_len
+        return ((xs[1:], us, x0.dot(Ps[0]).dot(x0))
                 if return_min
-                else (xs, us))
+                else (xs[1:], us))
 
 
 def quadrotor_linear_system(m=1,

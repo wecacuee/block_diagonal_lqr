@@ -6,10 +6,23 @@ import numpy as np
 from numpy.linalg import norm
 from bdlqr.separable import SeparableLinearSystem, joint_linear_system, solve_seq
 from bdlqr.linalg import ScalarQuadFunc
+from bdlqr.full import affine_backpropagation
+
+from scipy.optimize import fmin
 
 
-def mask_env_dynamics(slsys):
-    return SeparableLinearSystem()
+class MaskEnvDynamics:
+    def __init__(self, slsys):
+        self._slsys = slsys
+
+    def Ay(self):
+        raise NotImplementedError("Env dynamics not allowed")
+
+    def Bv(self):
+        raise NotImplementedError("Env dynamics not allowed")
+
+    def __getattr__(self, a):
+        return getattr(self._slsys, a)
 
 
 def independent_cost_to_go(slsys, max_iter=100):
@@ -25,12 +38,13 @@ def independent_cost_to_go(slsys, max_iter=100):
     >>> slsys = SeparableLinearSystem.random(T=3, rng=rng)
     >>> yD = slsys.Ay.shape[-1]
     >>> xD = slsys.Ax.shape[-1]
+    >>> uD = slsys.Bu.shape[-1]
     >>> y0 = rng.rand(yD)
     >>> x0 = rng.rand(xD)
     >>> us = [rng.rand(uD) for _ in range(slsys.T)]
     >>> ys, xs = slsys.forward(y0, x0, us)
     >>> V = independent_cost_to_go(slsys)
-    >>> (V(y0) > sum(yt.T.dot(slsys.Qy).dot(yt) for yt in ys)).all()
+    >>> (V(y0) <= sum(yt.T.dot(slsys.Qy).dot(yt) for yt in ys)).all()
     True
     """
     Qy   = slsys.Qy
@@ -70,6 +84,7 @@ def proximal_cost_to_go(slsys, GV, ṽks, ρ):
     >>> slsys = SeparableLinearSystem.random(T=3, rng=rng)
     >>> yD = slsys.Ay.shape[-1]
     >>> xD = slsys.Ax.shape[-1]
+    >>> uD = slsys.Bu.shape[-1]
     >>> y0 = rng.rand(yD)
     >>> x0 = rng.rand(xD)
     >>> us = [rng.rand(uD) for _ in range(slsys.T)]
@@ -79,7 +94,7 @@ def proximal_cost_to_go(slsys, GV, ṽks, ρ):
     >>> ρ = 1
     >>> GV = independent_cost_to_go(slsys)
     >>> V = proximal_cost_to_go(slsys, GV, vks, ρ)
-    >>> (V(y0) > sum(yt.T.dot(slsys.Qy).dot(yt) +
+    >>> (V(y0) <= sum(yt.T.dot(slsys.Qy).dot(yt) +
     ...              (0 if vkt is None else 0.5 * ρ * norm(vkt - slsys.E.dot(xt)))
     ...              for yt, xt, vkt in zip_longest(ys, xs, vks))).all()
     True
@@ -92,21 +107,22 @@ def proximal_cost_to_go(slsys, GV, ṽks, ρ):
     T    = slsys.T
 
     yD  = Ay.shape[-1]
-    vh  = np.hstack((v, 1))
-    vhD = vh.shape[0]
-    # V(y, ṽ) = arg min_v ∑_ṽ 0.5 ρ |ṽ_t - v_t]_2^2 + ∑_t y Q y
-    #            y_t+1   = Ay y_{t}   + Bv v_t
-    # V(y, ṽ) = arg min_v ∑ y Q y + 0.5 ρ [v_t^T, 1] [    1, -ṽ_t]  [v_t ]
-    #                                                [-ṽ_t^T,  ṽ^2]  [   1]
-    #            y_t+1   = Ay y_{t}   + [Bv, 0] [v_t]
-    #                                           [  1]
-    sy  = np.zeros(Qy.shape[0])
-    zv  = np.zeros(vh.shape[0])
-    oyT = np.zeros(QyT.shape[0])
-    Bvh = np.hstack((Bv, np.zeros((Bv.shape[0], 1))))
-    Rsh = [0.5 * ρ * np.vstack((np.hstack((np.eye(vh.shape[0]),    - ṽt)),
-                                np.hstack((             - ṽt.T, norm(ṽt)))))
-           for ṽt in ṽk]
+    vD  = Bv.shape[-1]
+    vhD = vD + 1
+    # V(y, ṽ) = arg min_v ∑_ṽ 0.5 ρ |ṽₜ - vₜ]_2^2 + ∑ₜ y Q y
+    #            yₜ₊₁   = Ay yₜ   + Bv vₜ
+    # V(y, ṽ) = arg min_v ∑ y Q y + 0.5 ρ [vₜᵀ, 1] [    1, -ṽₜ]  [vₜ ]
+    #                                              [-ṽₜᵀ,  ṽ^2]  [   1]
+    #            yₜ₊₁   = Ay yₜ   + [Bv, 0] [vₜ]
+    #                                       [ 1]
+    sy  = np.zeros(yD)
+    zv  = np.zeros(vhD)
+    oyT = np.zeros(yD)
+    Bvh = np.hstack((Bv, np.zeros((yD, 1))))
+    ṽks_col_vec = [ṽt[:, None] for ṽt in ṽks]
+    Rsh = [0.5 * ρ * np.vstack((np.hstack((np.eye(vD),         - ṽt)),
+                                np.hstack((    - ṽt.T, ṽt.T.dot(ṽt)))))
+           for ṽt in ṽks_col_vec]
     P_vs = deque([GV.Q])
     o_vs = deque([GV.l])
     K_vs = deque([])
@@ -135,14 +151,100 @@ def greedy_proximal_q_function(slsys, GV, y, ṽs, v, ρ):
     Ay   = slsys.Ay
     Bv   = slsys.Bv
     y1 = Ay.dot(y) + Bv.dot(v)
-    return (y.T.dot(Qy).dot(y) + 0.5 * ρ * norm(v - ṽs[0]) +
-            proximal_cost_to_go(slsys, independent_cost_to_go(slsys), ṽs[1:], ρ))
+    # GV = proximal_cost_to_go(slsys, independent_cost_to_go(slsys), ṽs[1:], ρ)
+    return (y.T.dot(Qy).dot(y) + 0.5 * ρ * norm(v - ṽs[0]) + GV(y1))
 
-def planning_from_learned_q_function(Q1, slsys1, slsys2, y0, x0, vs, us):
-    def prox_g_u(xk, zk, wk, ρ):
-        return Q1(y0, E.dot(xk) + wk/ρ
 
-    return admm((Q1, slsys2.prox_g_u)
+def argmin_greedy_proximal_q_function(slsys, GV, y, ṽs, ρ):
+    """
+    return arg min_v Qₚᵣₒₓ(y₀, ṽs, v)
+    """
+    Qy   = slsys.Qy
+    Ay   = slsys.Ay
+    Bv   = slsys.Bv
+
+    yD  = Ay.shape[-1]
+    vD  = Bv.shape[-1]
+    vhD = vD + 1
+    sy  = np.zeros(yD)
+    ṽks_col_vec = [ṽt[:, None] for ṽt in ṽks]
+    Rsh = [0.5 * ρ * np.vstack((np.hstack((np.eye(vD),         - ṽt)),
+                                np.hstack((    - ṽt.T, ṽt.T.dot(ṽt)))))
+           for ṽt in ṽks_col_vec]
+    zv  = np.zeros(vhD)
+    Bvh = np.hstack((Bv, np.zeros((yD, 1))))
+    P_new, o_new, K, k = affine_backpropagation(
+        Qy, sy, Rht, zv, Ay, Bvh, GV.Q, GV.l)
+    return K.dot(y) + k
+
+
+def approx_vtilde_dynamics(slsys, yt, vt, ws):
+    """
+    return argmin_u uₜᵀRₜuₜ + 0.5*ρ*|Exₜ - vₜ + wₜ/ρ|
+                 s.t. xₜ₊₁ = Ax xₜ + Bu uₜ
+    """
+    x0 = np.linalg.solve(E, vt)[0]
+    u0 = slsys.prox_g_u(None, x0, [vt], None, ws[:1])
+    Ax = slsys.Ax
+    Bu = slsys.Bu
+    return E.dot(Ax.dot(x0) + Bu.dot(u0)) + ws[0]/ρ
+
+
+def ground_true_env_dynamics(slsys, yt, vt):
+    Ay = slsys.Ay
+    Bv = slsys.Bv
+    return Ay.dot(yt) + Bv.dot(vt)
+
+
+def approx_env_dynamics(masked_slsys, Vprox, yt, xt, wt, vt, ρ):
+    """
+    yₜ₊₁ = arg min_y | Vprox(yₜ, ṽₜ) - yₜᵀQyₜ - 0.5 * ρ |ṽₜ - vₜ|₂² -  Vprox(y) |
+    return yₜ₊₁
+    """
+    Q = masked_slsys.Q
+    E = masked_slsys.E
+    ṽt = E.dot(xt) + wt/ρ
+    cost_t = yt.dot(Q).dot(yt) + 0.5 * ρ * (ṽt-vt).T.dot(ṽt-vt)
+    target_value = Vprox(yt, ṽt) - cost_t
+    cost = lambda y: target_value - Vprox(y, approx_vtilde_dynamics(slsys, y, vt, [wt], ρ))
+    return fmin(cost, yt)
+
+
+def planning_from_learned_q_function(masked_slsys1, Q1, argmin_Q1,
+                                     masked_slsys2, y0, x0, vs, us, wks,
+                                     env_dynamics, vtilde_dynamics):
+    slsys2 = masked_slsys2
+    T = slsys2.T
+    def prox_env(_, uks, wks, ρ):
+        """
+        return arg min_{vs} h(xks + wks / ρ)
+        """
+        Ax = slsys2.Ax
+        Bu = slsys2.Bu
+        E = slsys2.E
+        xks, uks = slsys2.forward_x(x0, us)
+        ṽks = [E.dot(xt) + wt/ρ
+               for xt, wt in zip(xks, wks)]
+        # Q1 can only return one step minimization
+        # TODO: We have two options to use ground truth dynamics or approximate
+        # dynamics
+        yt = y0
+        vs = []
+        for t in range(T):
+            vt = Q1_argmin(yt, ṽks[t:], ρ)
+            ytp1 = env_dynamics(yt, vt)
+            ṽks[t+1] = vtilde_dynamics(y, vt)
+            yt = ytp1
+            vs.append(vt)
+
+        return vs
+
+    prox_robot = slsys2.prox_g_u
+    const_fn = partial(slsys2.constraint_fn, y0, x0)
+    wks = admm_wk(vks, xks, const_fn, None)
+    vks_admm, uks_admm, wks_admm = admm((prox_env, prox_robot), vks, uks, wks,
+                                        const_fn, ρ)
+    return vks_admm, uks_admm
 
 
 def quadrotor_as_separable(Ay  = [[1.]],

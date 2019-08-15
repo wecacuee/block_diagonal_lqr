@@ -42,9 +42,7 @@ def solve_seq(slsys, y0, x0, traj_len):
     y1  = y_sys.f(y0, v0, 0)
     ys, vs = y_sys.solve(y1, traj_len)
     assert len(vs) == traj_len
-    assert len(ys) == traj_len + 1
-    ys.insert(0, y0)
-    vs.insert(0, v0)
+    assert len(ys) == traj_len
 
     # Reformulate the affine to a linear system by making the state a
     # homogeneous vector
@@ -69,11 +67,11 @@ def solve_seq(slsys, y0, x0, traj_len):
     x_sys = LinearSystem(Axh, Buh,
                          Qsx[:-1], np.zeros(Qsx[0].shape[0]),
                          R, np.zeros(R.shape[0]),
-                         Qsx[-1], np.zeros(Qsx[-1].shape[0]), T)
+                         Qsx[-1], np.zeros(Qsx[-1].shape[0]), len(vs))
     xhs, us = x_sys.solve(x0h, traj_len)
     assert len(us) == traj_len
     xs = [xh[:-1] for xh in xhs]
-    assert len(xs) == traj_len + 1
+    assert len(xs) == traj_len
 
     # Generate forward trajectory
     vs = [E.dot(xt) for xt in xs]
@@ -81,9 +79,9 @@ def solve_seq(slsys, y0, x0, traj_len):
     for t, vt in enumerate(vs):
         yt = y_sys.f(ys[-1], vt, t)
         ys.append(yt)
-    assert len(xs) == len(us) + 1
-    assert len(ys) == len(xs) + 1
-    return ys, xs, us
+    assert len(xs) == len(us)
+    assert len(ys[1:]) == len(xs)
+    return ys[1:], xs, us
 
 
 def joint_linear_system(slsys, y0, x0):
@@ -151,8 +149,11 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=10):
     T    = slsys.T
     assert not math.isinf(T)
     ys, xs, us = solve_seq(slsys, y0, x0, T)
+    assert len(ys) == len(xs) == len(us)
     vs = [E.dot(x) for x in xs]
-    ws = [np.zeros(vs[0].shape[0]) for _ in range(len(vs))]
+    assert len(vs) == len(us)
+    ws = [np.zeros(vt.shape[0]) for vt in vs]
+    assert len(ws) == len(us)
 
     for k in range(max_iter):
         ###
@@ -181,8 +182,9 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=10):
                                Qxs[:-1], np.zeros(Qxs[0].shape[0]),
                                R, np.zeros(R.shape[0]),
                                Qxs[-1], np.zeros(Qxs[-1].shape[0]),
-                               T)
-        xhs_new, us_new, usmin = x_sys.solve(x0h, T, return_min=True)
+                               len(vs))
+        xhs_new, us_new, usmin = x_sys.solve(x0h, len(us), return_min=True)
+        assert len(us_new) == len(us)
         xs_new = [xh[:-1] for xh in xhs_new]
 
         ###
@@ -204,10 +206,11 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-4, ρ=1, max_iter=10):
         y_sys  = LinearSystem(Ay, Bv,
                               Qy, np.zeros(Qy.shape[0]),
                               Rsv, zsv,
-                              QyT, np.zeros(QyT.shape[0]), T)
-        ys_new, vs_new, vsmin = y_sys.solve(y1, T, return_min=True)
-        ys_new.insert(0, y0)
-        vs_new.insert(0, v0)
+                              QyT, np.zeros(QyT.shape[0]), len(us))
+        ys_new, vs_new, vsmin = y_sys.solve(y1, len(us), return_min=True)
+        assert len(vs_new) == len(us)
+        #ys_new.insert(0, y0)
+        #vs_new.insert(0, v0)
 
         ###
         # ADMM Step 3: Update Lagrange parameters
@@ -255,7 +258,7 @@ def solve_admm2(slsys, y0, x0, traj_len, ε=1e-4, ρ=0.1, max_iter=10):
     warnings.warn("solve_admm2: This implementation does not provide good result. Use solve_admm instead")
     E = slsys.E
     ys, xs0, us0 = solve_seq(slsys, y0, x0, traj_len)
-    vs0 = [E.dot(xt) for xt in xs0[1:]]
+    vs0 = [E.dot(xt) for xt in xs0]
     ws0 = [np.zeros_like(vt) for vt in vs0]
     return admm((partial(slsys.prox_f_v, y0, x0),
                  partial(slsys.prox_g_u, y0, x0)),
@@ -301,7 +304,7 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         xs = [x0]
         for t, ut in enumerate(us):
             xs.append(Ax.dot(xs[-1]) + Bu.dot(ut))
-        return xs
+        return xs[1:]
 
     def forward_y(self, y0, vs):
         Ay = self.Ay
@@ -309,7 +312,7 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         ys = [y0]
         for t, vt in enumerate(vs):
             ys.append(Ay.dot(ys[-1]) + Bv.dot(vt))
-        return ys
+        return ys[1:]
 
     def forward(self, y0, x0, us):
         # Generate forward trajectory
@@ -330,7 +333,13 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                                           else ut.T.dot(R).dot(ut))
                 for t, (yt, ut) in enumerate(zip_longest(ys, us))]
 
-    def prox_g_u(self, y0, x0, vs, _, ws, ρ):
+    def prox_g_u(self, __, x0, vs, _, ws, ρ):
+        """
+        return arg min_{us} g(vks - wks / ρ)
+
+        g(vks - wks/ρ) = ∑ uₜᵀRₜuₜ + 0.5 ρ |Exₜ(us) - (vₜ - wₜ/ρ)|₂²
+                         s.t. xₜ₊₁ = Ax xₜ + Bu uₜ
+        """
         assert len(vs) == len(ws)
         R    = self.R
         E    = self.E
@@ -360,12 +369,12 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         Axh[:-1, :-1] = Ax
         Buh     = np.vstack((Bu, np.zeros((1, Bu.shape[1]))))
         x_sys   = LinearSystem(Axh,                    Buh,
-                               Qxs,                    np.zeros(Qxs[0].shape[0]),
+                               Qxs[:-1],                    np.zeros(Qxs[0].shape[0]),
                                R,                      np.zeros(R.shape[0]),
-                               np.zeros_like(Qxs[-1]), np.zeros(Qxs[-1].shape[0]),
-                               T)
+                               Qxs[-1], np.zeros(Qxs[-1].shape[0]),
+                               len(vs))
         xhs_new, us_new, usmin = x_sys.solve(x0h, len(vs), return_min=True)
-        assert len(xhs_new) == len(vs) + 1
+        assert len(xhs_new) == len(vs)
         assert len(us_new) == len(vs)
         return np.vstack(us_new)
 
@@ -385,11 +394,11 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         # Rᵥ = 0.5 ρ I
         # zᵥ = 0.5 ρ ( - E xₖₜ - wₖₜ/ρ )
         xs = self.forward_x(x0, us)
-        assert len(xs) == len(us) + 1
+        assert len(xs) == len(us)
         Rsv = [0.5 * ρ * np.eye(E.shape[0])
                for _ in xs]
         zsv = [0.5 * ρ * ( -E.dot(x) - w/ρ )
-               for x, w in zip(xs[1:], ws)]
+               for x, w in zip(xs, ws)]
 
         # v0 is fixed because x0, v_{1:T} is unknown
         v0 = E.dot(x0)
@@ -398,10 +407,10 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         y_sys  = LinearSystem(Ay, Bv,
                               Qy, np.zeros(Qy.shape[0]),
                               Rsv, zsv,
-                              QyT, np.zeros(QyT.shape[0]), T)
+                              QyT, np.zeros(QyT.shape[0]), len(us))
         ys_new, vs_new, vsmin = y_sys.solve(y1, len(us), return_min=True)
         assert len(vs_new) == len(us)
-        assert len(ys_new) == len(vs_new) + 1
+        assert len(ys_new) == len(vs_new)
         return np.vstack(vs_new)
 
     def constraint_fn(self, y0, x0, vs_us):
@@ -414,9 +423,9 @@ class SeparableLinearSystem(_SeparableLinearSystem):
         ulen = len(us)
 
         xs = self.forward_x(x0, us)
-        assert len(xs) == ulen + 1
+        assert len(xs) == ulen
         # Need to vstack it because it should support the addition operator
-        ws = np.vstack(([E.dot(xt) - vt for xt, vt in zip(xs[1:], vs)]))
+        ws = np.vstack(([E.dot(xt) - vt for xt, vt in zip(xs, vs)]))
         assert ws.shape == (len(vs), vs[0].shape[0])
         return ws
 
@@ -457,7 +466,7 @@ def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30):
     plotables, y0, x0, *sepsys = example()
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
-    solvers = (solve_full, solve_seq, solve_admm)
+    solvers = (solve_full, solve_seq, solve_admm, solve_admm2)
     labels = map(attrgetter('__name__'), solvers)
     short_labels = diff_substr(labels)
     eff_traj_len = min(slsys.T, traj_len)
