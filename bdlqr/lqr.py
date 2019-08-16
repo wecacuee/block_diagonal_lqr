@@ -180,10 +180,9 @@ class LinearSystem:
         return (c + s for c, s in zip( reversed(ctrl_costs),
                                        reversed(state_costs) ))
 
-    def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-6, return_min=False):
-        if not x0.shape[0] == self.A.shape[0]: raise ValueError()
+    def solve_f(self, t=0, traj_len=100, max_iter=1000, ε=1e-6, return_min=False):
         P_t = self.Q_T
-        eff_backprop = int(min(self.T, max_iter))
+        eff_backprop = int(min(self.T - t, max_iter))
         Ps = deque([P_t], eff_backprop)
         os = deque([self.s_T], eff_backprop)
         Ks = deque([], eff_backprop)
@@ -203,17 +202,26 @@ class LinearSystem:
         if math.isinf(self.T):
             Ks = repeat(Ks[0])
             ks = repeat(ks[0])
+        us = (AffineFunction(-Kt, -kt) for Kt, kt in zip(Ks, ks))
+        Vs = (ScalarQuadFunc(Pt, ot, np.array(0))
+              for Pt, ot in zip(Ps, os))
+        return ((us, Vs)
+                if return_min
+                else us)
 
+    def solve(self, x0, traj_len=100, max_iter=1000, ε=1e-6, return_min=False):
+        if not x0.shape[0] == self.A.shape[0]: raise ValueError()
+        ufs, Vfs = self.solve_f(traj_len=traj_len, max_iter=max_iter, ϵ=ϵ, return_min=True)
         xs = [x0]
         us = []
         eff_traj_len = min(self.T, traj_len)
-        for t, K, k in zip(range(eff_traj_len), Ks, ks):
-            us.append(-K.dot(xs[t]) - k)
+        for t, uft in zip(range(eff_traj_len), ufs):
+            us.append(uft(xs[t]))
             xs.append(self.f(xs[t], us[t], t))
 
         assert len(us) == eff_traj_len
         assert len(xs[1:]) == eff_traj_len
-        return ((xs[1:], us, x0.dot(Ps[0]).dot(x0))
+        return ((xs[1:], us, next(Vfs)(x0))
                 if return_min
                 else (xs[1:], us))
 

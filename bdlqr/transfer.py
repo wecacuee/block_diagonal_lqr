@@ -10,7 +10,7 @@ import numpy as np
 from numpy.linalg import norm
 from bdlqr.separable import SeparableLinearSystem, joint_linear_system, solve_seq
 from bdlqr.linalg import ScalarQuadFunc
-from bdlqr.lqr import affine_backpropagation
+from bdlqr.lqr import affine_backpropagation, LinearSystem
 
 from scipy.optimize import fmin
 
@@ -29,27 +29,10 @@ class MaskEnvDynamics:
         return getattr(self._slsys, a)
 
 
-def independent_cost_to_go(slsys, max_iter=100):
+def independent_env_linsys(slsys):
     """
     V(y₀) = arg min_v ∑ₜ c(yₜ)
             s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
-
-    Let Vₜ(yₜ) = yₜᵀ Pₜ yₜ + 2 oₜᵀyₜ
-    return ScalarQuadFunc(Pₜ, oₜ, 0)
-
-    >>> seed = np.random.randint(10000)
-    >>> rng = np.random.RandomState(seed)
-    >>> slsys = SeparableLinearSystem.random(T=3, rng=rng)
-    >>> yD = slsys.Ay.shape[-1]
-    >>> xD = slsys.Ax.shape[-1]
-    >>> uD = slsys.Bu.shape[-1]
-    >>> y0 = rng.rand(yD)
-    >>> x0 = rng.rand(xD)
-    >>> us = [rng.rand(uD) for _ in range(slsys.T)]
-    >>> ys, xs = slsys.forward(y0, x0, us)
-    >>> V = independent_cost_to_go(slsys)
-    >>> (V(y0) <= sum(yt.T.dot(slsys.Qy).dot(yt) for yt in ys)).all()
-    True
     """
     Qy   = slsys.Qy
     Ay   = slsys.Ay
@@ -63,20 +46,123 @@ def independent_cost_to_go(slsys, max_iter=100):
     Rv  = np.zeros((vD, vD))
     zv  = np.zeros(vD)
     oyT = np.zeros(yD)
-
-    # Loop back from T
-    iterations = min(max_iter, T)
-    P_new, o_new = QyT, oyT
-    for _ in range(iterations):
-        P_new, o_new, K, k = affine_backpropagation(
-            Qy, sy, Rv, zv, Ay, Bv, P_new, o_new)
-    return ScalarQuadFunc(P_new, o_new, np.array(0))
+    return LinearSystem(Ay, Bv, Qy, sy, Rv, zv, QyT, sy, T)
 
 
-def proximal_cost_to_go(slsys, GV, ṽks, ρ):
+def independent_cost_to_go(slsys, max_iter=100):
     """
-    GV(y₀) := arg min_v ∑ₜ yₜᵀQyₜ
+    V(y₀) = arg min_v ∑ₜ c(yₜ)
             s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
+
+    Let Vₜ(yₜ) = yₜᵀ Pₜ yₜ + 2 oₜᵀyₜ
+    return ScalarQuadFunc(Pₜ, oₜ, 0)
+
+    >>> seed = np.random.randint(10000)
+    >>> LOG.info("seed={}".format(seed))
+    >>> rng = np.random.RandomState(seed)
+    >>> slsys = SeparableLinearSystem.random(T=3, rng=rng)
+    >>> yD = slsys.Ay.shape[-1]
+    >>> vD = slsys.Bv.shape[-1]
+    >>> y0 = rng.rand(yD)
+    >>> vs = [rng.rand(vD) for _ in range(slsys.T)]
+    >>> ys = slsys.forward_y(y0, vs)
+    >>> Vf = independent_cost_to_go(slsys)[0]
+    >>> (Vf(y0) <= ys[-1].T.dot(slsys.QyT).dot(ys[-1]) + sum(
+    ...             yt.T.dot(slsys.Qy).dot(yt) for yt in [y0] + ys[:-1])).all()
+    True
+    """
+    ind_env_linsys = independent_env_linsys(slsys)
+    ufs, Vfs = ind_env_linsys.solve_f(max_iter=max_iter, return_min=True)
+    return list(Vfs)
+
+
+def proximal_env_linsys(slsys, ṽks, ρ):
+    """
+
+    Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ |vₜ - ṽₜ| + GV(yₖ₊₁)
+    """
+    n = len(ṽks)
+    Qy   = slsys.Qy
+    Ay   = slsys.Ay
+    Bv   = slsys.Bv
+    T    = slsys.T
+    assert len(ṽks) <= T
+
+    yD  = Ay.shape[-1]
+    vD  = Bv.shape[-1]
+    vhD = vD + 1
+    # V(y, ṽ) = arg min_v ∑_ṽ 0.5 ρ |ṽₜ - vₜ]_2^2 + ∑ₜ y Q y
+    #            yₜ₊₁   = Ay yₜ   + Bv vₜ
+    # V(y, ṽ) = arg min_v ∑ y Q y + 0.5 ρ [vₜᵀ, 1] [    1, -ṽₜ]  [vₜ ]
+    #                                              [-ṽₜᵀ,  ṽ^2]  [   1]
+    #            yₜ₊₁   = Ay yₜ   + [Bv, 0] [vₜ]
+    #                                       [ 1]
+    sy  = np.zeros(yD)
+    zvh  = np.zeros(vhD)
+    oyT = np.zeros(yD)
+    Bvh = np.hstack((Bv, np.zeros((yD, 1))))
+    ṽks_col_vec = [ṽt[:, None] for ṽt in ṽks]
+    Rsh = [0.5 * ρ * np.vstack((np.hstack((np.eye(vD),         - ṽt)),
+                                np.hstack((    - ṽt.T, ṽt.T.dot(ṽt)))))
+           for ṽt in ṽks_col_vec]
+
+
+    # IV(y₀) := arg min_v ∑ₜ yₜᵀQyₜ
+    #         s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
+    slsys_remaining = SeparableLinearSystem(Qy=slsys.Qy,
+                                            R=slsys.R,
+                                            Ay=slsys.Ay,
+                                            Bv=slsys.Bv,
+                                            QyT=slsys.QyT,
+                                            E=slsys.E,
+                                            Ax=slsys.Ax,
+                                            Bu=slsys.Bu,
+                                            T=slsys.T - len(ṽks))
+    IV = independent_cost_to_go(slsys_remaining)
+    return LinearSystem(Ay, Bvh, Qy, sy, Rsh, zvh, IV.Q, IV.l, len(Rsh))
+
+
+def proximal_robot_linsys(mslsys, vks, wks, ρ):
+    """
+
+    Vₚᵣₒₓ(xₜ, vsₜ₊₁:) = min_u uᵀRu + 0.5 ρ |Exₜ₊₁(u) + wₜ₊₁/ρ - vₜ₊₁|₂² + ∑ⁿₜ₌₁ uₜᵀRuₜ
+    """
+    n = len(ṽks)
+    E    = mslsys.E
+    R    = mslsys.R
+    Ax   = mslsys.Ax
+    Bu   = mslsys.Bu
+    T    = mslsys.T
+    assert len(ṽks) <= T
+
+    xD  = Ax.shape[-1]
+    uD  = Bu.shape[-1]
+    # Vₚᵣₒₓ(xₜ, vsₜ₊₁:) = min_u uᵀRu + 0.5 ρ |Exₜ₊₁(u) + wₜ₊₁/ρ - vₜ₊₁|₂² + ∑ⁿₜ₌₁ uₜᵀRuₜ
+    # Qx = 0.5 ρ [           EᵀE,                    -vₜ₊₁ + wₜ₊₁/ρ]
+    #            [-vₜ₊₁ + wₜ₊₁/ρ, (-vₜ₊₁ + wₜ₊₁/ρ)ᵀ(-vₜ₊₁ + wₜ₊₁/ρ)]
+    xhD = xD + 1
+    vdesired = [(-vtp1 + wtp1/ρ)[:, None]
+                for vtp1, wtp1 in zip(vks, wks)]
+    Qxhs = [0.5 * ρ * np.vstack((np.hstack((E.T.dot(E), vdtp1)),
+                                 np.hstack((vdtp1.T, vdtp1.T.dot(vdtp1)))))
+           for vdtp1 in vdesired]
+    sxh  = np.zeros(xD)
+    zu  = np.zeros(uD)
+    oyT = np.zeros(yD)
+    Axh = np.eye(xhD)
+    Axh[:-1, :-1] = Ax
+    Buh = np.vstack((Bv, np.zeros((1, uD))))
+    return LinearSystem(Axh, Buh, Qxhs[:-1], sxh, R, zu, Qxhs[-1], sxh, len(Qxhs))
+
+
+def proximal_robot_solution(mslsys, vks, wks, ρ):
+    sys = proximal_robot_linsys(mslsys, vks, wks, ρ)
+    ufs, Vfs = sys.solve_f(return_min=True)
+    return list(ufs), list(Vfs)
+
+
+def proximal_env_solution(slsys, ṽks, ρ, t):
+    """
 
     Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ |vₜ - ṽₜ| + GV(yₖ₊₁)
 
@@ -97,105 +183,33 @@ def proximal_cost_to_go(slsys, GV, ṽks, ρ):
     >>> vD = slsys.Bv.shape[-1]
     >>> vks = [rng.rand(vD)]
     >>> ρ = 1
-    >>> GV = independent_cost_to_go(slsys)
-    >>> V = proximal_cost_to_go(slsys, GV, vks, ρ)
-    >>> (V(y0) <= sum(yt.T.dot(slsys.Qy).dot(yt) +
-    ...              0.5 * ρ * norm(vkt - slsys.E.dot(xt))
-    ...              for yt, xt, vkt in zip(ys, xs, vks))).all()
+    >>> V = proximal_solution(slsys, vks, ρ)
+    >>> (V(y0) <= ys[-1].dot(slsys.QyT).dot(ys[-1])
+    ...               + y0.T.dot(slsys.Qy).dot(y0)
+    ...               + sum(yt.T.dot(slsys.Qy).dot(yt) for yt in ys[:-1])
+    ...               + sum(0.5 * ρ * norm(vkt - slsys.E.dot(xt))
+    ...                     for xt, vkt in zip(xs, vks))).all()
     True
     """
-    n = len(ṽks)
-    Qy   = slsys.Qy
-    Ay   = slsys.Ay
-    Bv   = slsys.Bv
-    QyT  = slsys.QyT
-    T    = slsys.T
-
-    yD  = Ay.shape[-1]
-    vD  = Bv.shape[-1]
-    vhD = vD + 1
-    # V(y, ṽ) = arg min_v ∑_ṽ 0.5 ρ |ṽₜ - vₜ]_2^2 + ∑ₜ y Q y
-    #            yₜ₊₁   = Ay yₜ   + Bv vₜ
-    # V(y, ṽ) = arg min_v ∑ y Q y + 0.5 ρ [vₜᵀ, 1] [    1, -ṽₜ]  [vₜ ]
-    #                                              [-ṽₜᵀ,  ṽ^2]  [   1]
-    #            yₜ₊₁   = Ay yₜ   + [Bv, 0] [vₜ]
-    #                                       [ 1]
-    sy  = np.zeros(yD)
-    zv  = np.zeros(vhD)
-    oyT = np.zeros(yD)
-    Bvh = np.hstack((Bv, np.zeros((yD, 1))))
-    ṽks_col_vec = [ṽt[:, None] for ṽt in ṽks]
-    Rsh = [0.5 * ρ * np.vstack((np.hstack((np.eye(vD),         - ṽt)),
-                                np.hstack((    - ṽt.T, ṽt.T.dot(ṽt)))))
-           for ṽt in ṽks_col_vec]
-    P_vs = deque([GV.Q])
-    o_vs = deque([GV.l])
-    K_vs = deque([])
-    k_vs = deque([])
-    for Rht in reversed(Rsh):
-        Pt, ot, Kt, kt = affine_backpropagation(
-            Qy, sy, Rht, zv, Ay, Bvh, P_vs[-1], o_vs[-1])
-        P_vs.appendleft(Pt)
-        o_vs.appendleft(ot)
-        K_vs.appendleft(Kt)
-        k_vs.appendleft(kt)
-    return ScalarQuadFunc(P_vs[0], o_vs[0], np.array(0))
+    prox_env_sys = proximal_env_linsys(slsys, ṽks, ρ)
+    ufs, Vfs = prox_env_sys.solve_f(t=t, return_min=True)
+    return list(ufs), list(Vfs)
 
 
-def greedy_proximal_q_function(slsys, GV, y, ṽs, v, ρ):
-    """
-    Qₚᵣₒₓ(y₀, ṽs, v₀) := c(y₀) + 0.5 ρ |v₀ - ṽ₀|
-                        + minᵥ ∑ᵏₜ₌₁ c(yₜ) + 0.5 ρ |vₜ - ṽₜ| + GV(yₖ₊₁)
-            s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
-            where k = len(ṽs)
-
-    return Qₚᵣₒₓ(y₀, ṽs, v)
-
-    """
-    Qy   = slsys.Qy
-    Ay   = slsys.Ay
-    Bv   = slsys.Bv
-    y1 = Ay.dot(y) + Bv.dot(v)
-    # GV = proximal_cost_to_go(slsys, independent_cost_to_go(slsys), ṽs[1:], ρ)
-    return (y.T.dot(Qy).dot(y) + 0.5 * ρ * norm(v - ṽs[0]) + GV(y1))
-
-
-def argmin_greedy_proximal_q_function(slsys, GV, y, ṽs, ρ):
-    """
-    return arg min_v Qₚᵣₒₓ(y₀, ṽs, v)
-    """
-    Qy   = slsys.Qy
-    Ay   = slsys.Ay
-    Bv   = slsys.Bv
-
-    yD  = Ay.shape[-1]
-    vD  = Bv.shape[-1]
-    vhD = vD + 1
-    sy  = np.zeros(yD)
-    ṽks_col_vec = [ṽt[:, None] for ṽt in ṽks]
-    Rsh = [0.5 * ρ * np.vstack((np.hstack((np.eye(vD),         - ṽt)),
-                                np.hstack((    - ṽt.T, ṽt.T.dot(ṽt)))))
-           for ṽt in ṽks_col_vec]
-    zv  = np.zeros(vhD)
-    Bvh = np.hstack((Bv, np.zeros((yD, 1))))
-    P_new, o_new, K, k = affine_backpropagation(
-        Qy, sy, Rht, zv, Ay, Bvh, GV.Q, GV.l)
-    return K.dot(y) + k
-
-
-def approx_vtilde_dynamics(slsys, yt, vt, ws):
+def vtilde_dynamics(slsys, yt, xt, wt):
     """
     return argmin_u uₜᵀRₜuₜ + 0.5*ρ*|Exₜ - vₜ + wₜ/ρ|
                  s.t. xₜ₊₁ = Ax xₜ + Bu uₜ
     """
-    x0 = np.linalg.solve(E, vt)[0]
-    u0 = slsys.prox_g_u(None, x0, [vt], None, ws[:1])
+    E = slsys.E
+    ṽt = E.dot(xt)
+    u0 = slsys.prox_g_u(None, xt, [ṽt], None, [wt])
     Ax = slsys.Ax
     Bu = slsys.Bu
     return E.dot(Ax.dot(x0) + Bu.dot(u0)) + ws[0]/ρ
 
 
-def ground_true_env_dynamics(slsys, yt, vt):
+def ground_truth_env_dynamics(slsys, yt, vt):
     Ay = slsys.Ay
     Bv = slsys.Bv
     return Ay.dot(yt) + Bv.dot(vt)
@@ -203,52 +217,54 @@ def ground_true_env_dynamics(slsys, yt, vt):
 
 def approx_env_dynamics(masked_slsys, Vprox, yt, xt, wt, vt, ρ):
     """
-    yₜ₊₁ = arg min_y | Vprox(yₜ, ṽₜ) - yₜᵀQyₜ - 0.5 * ρ |ṽₜ - vₜ|₂² -  Vprox(y) |
+    yₜ₊₁ = arg min_y | Vprox(yₜ, ṽₜ) + yₜᵀQyₜ + 0.5 * ρ |ṽₜ - vₜ|₂² -  Vprox(y) |
     return yₜ₊₁
     """
     Q = masked_slsys.Q
     E = masked_slsys.E
     ṽt = E.dot(xt) + wt/ρ
     cost_t = yt.dot(Q).dot(yt) + 0.5 * ρ * (ṽt-vt).T.dot(ṽt-vt)
-    target_value = Vprox(yt, ṽt) - cost_t
-    cost = lambda y: target_value - Vprox(y, approx_vtilde_dynamics(slsys, y, vt, [wt], ρ))
+    target_value = Vprox(yt, ṽt) + cost_t
+    cost = lambda y: target_value - Vprox(y, vtilde_dynamics(slsys, y, vt, [wt], ρ))
     return fmin(cost, yt)
 
 
 def planning_from_learned_q_function(masked_slsys1, Q1, argmin_Q1,
-                                     masked_slsys2, y0, x0, vs, us, wks,
-                                     env_dynamics, vtilde_dynamics):
+                                     masked_slsys2,
+                                     y0, x0,
+                                     env_dynamics=approx_env_dynamics,
+                                     vtilde_dynamics=vtilde_dynamics):
     slsys2 = masked_slsys2
     T = slsys2.T
     def prox_env(_, uks, wks, ρ):
         """
         return arg min_{vs} h(xks + wks / ρ)
         """
+        assert len(uks) == 1
+        assert len(wks) == 1
         Ax = slsys2.Ax
         Bu = slsys2.Bu
         E = slsys2.E
-        xks, uks = slsys2.forward_x(x0, us)
+        xks, uks = slsys2.forward_x(x0, uks)
+        # wt is defined as
+        # wₜᵀ(Exₜ-vₜ)
         ṽks = [E.dot(xt) + wt/ρ
                for xt, wt in zip(xks, wks)]
-        # Q1 can only return one step minimization
-        # TODO: We have two options to use ground truth dynamics or approximate
-        # dynamics
         yt = y0
         vs = []
-        for t in range(T):
-            vt = Q1_argmin(yt, ṽks[t:], ρ)
-            ytp1 = env_dynamics(yt, vt)
-            ṽks[t+1] = vtilde_dynamics(y, vt)
-            yt = ytp1
-            vs.append(vt)
+        vopt = Q1_argmin(yt, ṽks, ρ)
+        return vopt
 
-        return vs
-
-    prox_robot = slsys2.prox_g_u
+    prox_robot = partial(slsys2.prox_g_u, y0, x0)
     const_fn = partial(slsys2.constraint_fn, y0, x0)
-    wks = admm_wk(vks, xks, const_fn, None)
+    E = slsys2.E
+    uks = [np.array([0])]
+    vks = [E.dot(xt) for xt in xks]
+    wks = admm_wk(vks, uks, const_fn)
     vks_admm, uks_admm, wks_admm = admm((prox_env, prox_robot), vks, uks, wks,
                                         const_fn, ρ)
+    assert len(uks) == 1
+    assert len(wks) == 1
     return vks_admm, uks_admm
 
 
@@ -273,6 +289,51 @@ def quadrotor_as_separable(Ay  = [[1.]],
     QyT = np.array(Qy)*100
     return (SeparableLinearSystem(*map(np.array, (Qy, R1, Ay, Bv, QyT, E1, Ax1, Bu1, T))),
             SeparableLinearSystem(*map(np.array, (Qy, R2, Ay, Bv, QyT, E2, Ax2, Bu2, T))))
+
+
+def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t):
+    """
+    """
+    uD = mslsys2.Bu.shape[-1]
+    vD = mslsys2.E.shape[0]
+    E = mslsys2.E
+    def prox_v(_, us, ws, ρ):
+        ṽt = E.dot(xt)
+        ṽs = [E.dot((Ax.dot(xt) + Bu.dot(ut))) + wt/ρ
+              for ut, wt in zip(us, ws)]
+        vt = argmin_Q1(yt, ṽs, t)
+        vs = vt.reshape(1, -1)
+        return vs
+
+    def prox_u(vs, _, ws, ρ):
+        ufs, Vfs = proximal_robot_solution(mslsys2, vs, ws, ρ)
+        uf0 = next(ufs)
+        us = uf0(xt).reshape(1, -1)
+        return us
+
+    us0 = np.zeros(1, uD)
+    ws0 = np.zeros(1, vD)
+    vs0 = E.dot(xt).reshape(1, -1)
+    const_fn = partial(mslsys2.constraint_fn, yt, xt)
+    vs, us, ws = admm((prox_v, prox_u), vs0, us0, ws0, const_fn)
+    return us[0]
+
+
+def transfer_mpc_admm(slsys1, slsys2, y0, x0, ρ, traj_len):
+    def argmin_Q1(yt, ṽks, t):
+        vfs, Vfs = proximal_env_solution(slsys1, ṽks, ρ, t)
+        return vfs[0](yt)
+
+    mslsys1 = MaskEnvDynamics(slsys1)
+    mslsys2 = MaskEnvDynamics(slsys2)
+    us = []
+    for t in range(traj_len):
+        ut = solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t)
+        us.append(ut)
+
+    ys, xs,slsys2.forward(y0, x0, us)
+    return ys, xs, us
+
 
 
 def test_transfer_separable_quad():
