@@ -1,10 +1,10 @@
 from collections import deque
 from functools import partial
 from itertools import zip_longest
-from logging import basicConfig, getLogger, INFO
+from logging import basicConfig, getLogger, INFO, DEBUG
 basicConfig()
 LOG = getLogger(__name__)
-LOG.setLevel(INFO)
+LOG.setLevel(DEBUG)
 
 import numpy as np
 from numpy.linalg import norm
@@ -13,7 +13,7 @@ from scipy.optimize import fmin
 from bdlqr.separable import (SeparableLinearSystem, joint_linear_system,
                              plot_separable_sys_results)
 from bdlqr.linalg import ScalarQuadFunc
-from bdlqr.lqr import affine_backpropagation, LinearSystem
+from bdlqr.lqr import LinearSystem
 from bdlqr.admm import admm
 from bdlqr.functools import getdefaultkw
 
@@ -50,7 +50,7 @@ def independent_env_linsys(slsys):
     Rv  = np.zeros((vD, vD))
     zv  = np.zeros(vD)
     oyT = np.zeros(yD)
-    return LinearSystem(Ay, Bv, Qy, sy, Rv, zv, QyT, sy, T)
+    return LinearSystem(Ay, Bv, Qy, sy, Rv, zv, QyT, sy, T, γ=slsys.γ)
 
 
 def independent_cost_to_go(slsys, max_iter=100):
@@ -108,10 +108,13 @@ def proximal_env_linsys(slsys, ṽks, ρ, t):
 
     # IV(y₀) := arg min_v ∑ₜ yₜᵀQyₜ
     #         s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
-    slsys_remaining = SeparableLinearSystem.copy(slsys,
-                                                 T=slsys.T - t - len(ṽks))
-    IV, *_ = independent_cost_to_go(slsys_remaining)
-    return LinearSystem(Ay, Bv, Qy, sy, Rsv, zsv, IV.Q, IV.l, len(Rsv))
+    if slsys.T > t + len(ṽks):
+        slsys_remaining = SeparableLinearSystem.copy(slsys,
+                                                    T=slsys.T - t - len(ṽks))
+        IV, *_ = independent_cost_to_go(slsys_remaining)
+    else:
+        IV = ScalarQuadFunc(np.zeros_like(Qy), np.zeros_like(sy), np.zeros(1))
+    return LinearSystem(Ay, Bv, Qy, sy, Rsv, zsv, IV.Q, IV.l, len(Rsv), γ=slsys.γ)
 
 
 def proximal_robot_linsys(mslsys, vks, wks, ρ):
@@ -144,7 +147,7 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ):
     Axh = np.eye(xhD)
     Axh[:-1, :-1] = Ax
     Buh = np.vstack((Bu, np.zeros((1, uD))))
-    return LinearSystem(Axh, Buh, Qxhs[:-1], sxh, R, zu, Qxhs[-1], sxh, len(Qxhs))
+    return LinearSystem(Axh, Buh, Qxhs[:-1], sxh, R, zu, Qxhs[-1], sxh, len(Qxhs), γ=mslsys.γ)
 
 
 def proximal_robot_solution(mslsys, vks, wks, ρ):
@@ -275,17 +278,18 @@ def quadrotor_as_separable(Ay  = [[1.]],
                            Ax2 = [[2.]],
                            y0  = [-1],
                            x0  = [0],
-                           T   = np.Inf):
+                           T   = np.Inf,
+                           γ   = 1):
     Bu1=[[1/m1]]
     R1=[[r01]]
     Bu2=[[1/m2]]
     R2=[[r02]]
     QyT = np.array(Qy)*100
-    return (SeparableLinearSystem(*map(np.array, (Qy, R1, Ay, Bv, QyT, E1, Ax1, Bu1, T))),
-            SeparableLinearSystem(*map(np.array, (Qy, R2, Ay, Bv, QyT, E2, Ax2, Bu2, T))))
+    return (SeparableLinearSystem(*map(np.array, (Qy, R1, Ay, Bv, QyT, E1, Ax1, Bu1, T, γ))),
+            SeparableLinearSystem(*map(np.array, (Qy, R2, Ay, Bv, QyT, E2, Ax2, Bu2, T, γ))))
 
 
-def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t):
+def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, V1=None):
     """
     """
     uD = mslsys2.Bu.shape[-1]
@@ -294,6 +298,9 @@ def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t):
     def prox_v(_, us, ws, ρ):
         ṽs = [E.dot(mslsys2.f_x(xt, us[0])) + ws[0]/ρ]
         vt = argmin_Q1(yt, ṽs, t)
+        if V1 is not None:
+            LOG.debug("V1={}".format([V1(yt, ṽs, t)
+                                      for t in range(mslsys2.T-1)]))
         vs = vt.reshape(1, -1)
         return vs
 
@@ -311,13 +318,25 @@ def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t):
     return us[0]
 
 
-def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1):
-    if slsys1 is None:
-        slsys1 = SeparableLinearSystem.copy(
+def training_system_flexible(slsys2):
+    return SeparableLinearSystem.copy(
             slsys2,
             R=np.zeros_like(slsys2.R),
             Ax=np.zeros_like(slsys2.Ax),
             Bu=np.ones_like(slsys2.Bu))
+
+
+def training_system_equal(slsys2):
+    return SeparableLinearSystem.copy(slsys2)
+
+
+def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1):
+    if slsys1 is None:
+        slsys1 = training_system_flexible(slsys2)
+
+    def V1(yt, ṽks, t):
+        vfs, Vfs = proximal_env_solution(slsys1, ṽks, ρ, t)
+        return Vfs[0](yt)
 
     def argmin_Q1(yt, ṽks, t):
         vfs, Vfs = proximal_env_solution(slsys1, ṽks, ρ, t)
@@ -329,7 +348,7 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1):
     ys = [y0]
     xs = [x0]
     for t in range(traj_len):
-        ut = solve_mpc_admm(argmin_Q1, mslsys2, ys[t], xs[t], ρ, t)
+        ut = solve_mpc_admm(argmin_Q1, mslsys2, ys[t], xs[t], ρ, t, V1=V1)
         us.append(ut)
         xs.append(slsys2.f_x(xs[t], ut))
         vt = slsys2.effect(xs[t])
@@ -338,8 +357,10 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1):
     ys, xs = slsys2.forward(y0, x0, us)
     return ys, xs, us
 
+
 def solve_by_transfer(slsys1):
     return partial(transfer_mpc_admm, slsys1)
+
 
 def test_transfer_separable_quad():
     slsys1, slsys2 = quadrotor_as_separable()
@@ -351,5 +372,8 @@ def test_transfer_separable_quad():
 
 if __name__ == '__main__':
     plot_separable_sys_results(
+        example=partial(getdefaultkw(plot_separable_sys_results, "example"),
+                        γ=0.9),
         solvers=list(getdefaultkw(plot_separable_sys_results, "solvers")) +
-        [solve_by_transfer(None)])
+        [solve_by_transfer(None)],
+        traj_len=4)

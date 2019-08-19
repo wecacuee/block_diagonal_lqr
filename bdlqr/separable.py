@@ -178,7 +178,7 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-6, ρ=1, max_iter=5000):
 
 
 _SeparableLinearSystem = namedtuple('_SeparableLinearSystem',
-                                    "Qy R Ay Bv QyT E Ax Bu T".split(" "))
+                                    "Qy R Ay Bv QyT E Ax Bu T γ".split(" "))
 
 
 class SeparableLinearSystem(_SeparableLinearSystem):
@@ -200,7 +200,8 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                    E   = rng.rand(vD, xD),
                    Ax  = rng.rand(xD, xD),
                    Bu  = rng.rand(xD, uD),
-                   T   = T)
+                   T   = T,
+                   γ   = 1)
 
     @classmethod
     def copy(cls, other, **overrides):
@@ -364,12 +365,12 @@ def plotables(ys, xs, us, linsys, traj_len):
             ("cost", costs)]
 
 
-def quadrotor_square_example():
+def quadrotor_square_example(γ=1):
     _, y0, Ay, Bv, Qy, _, _, _, QyT, _, _ = quadrotor_linear_system()
     _, x0, Ax, Bu, _, _, R, _, _, _, _ = quadrotor_linear_system()
     E = np.hstack((np.eye(Bv.shape[1]),
                    np.zeros((Bv.shape[1], Ax.shape[1] - Bv.shape[1]))))
-    return plotables, y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, 100
+    return plotables, y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, 100, γ
 
 
 def quadrotor_as_separable(m  = 1,
@@ -381,11 +382,12 @@ def quadrotor_as_separable(m  = 1,
                            Ax = [[1.]],
                            y0 = [-1],
                            x0 = [0],
-                           T  = 100):
+                           T  = 4,
+                           γ  = 1):
     Bu=[[1/m]]
     R=[[r0]]
     QyT = np.array(Qy)*100
-    return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T)))
+    return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T, γ)))
 
 def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
                                solvers=(solve_full, solve_seq, solve_admm),
