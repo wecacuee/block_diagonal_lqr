@@ -118,7 +118,7 @@ def proximal_env_linsys(slsys, ṽks, ρ):
                                             Ax=slsys.Ax,
                                             Bu=slsys.Bu,
                                             T=slsys.T - len(ṽks))
-    IV = independent_cost_to_go(slsys_remaining)
+    IV, *_ = independent_cost_to_go(slsys_remaining)
     return LinearSystem(Ay, Bvh, Qy, sy, Rsh, zvh, IV.Q, IV.l, len(Rsh))
 
 
@@ -183,8 +183,8 @@ def proximal_env_solution(slsys, ṽks, ρ, t):
     >>> vD = slsys.Bv.shape[-1]
     >>> vks = [rng.rand(vD)]
     >>> ρ = 1
-    >>> V = proximal_solution(slsys, vks, ρ)
-    >>> (V(y0) <= ys[-1].dot(slsys.QyT).dot(ys[-1])
+    >>> ufs, Vfs = proximal_env_solution(slsys, vks, ρ, 0)
+    >>> (Vfs[0](y0) <= ys[-1].dot(slsys.QyT).dot(ys[-1])
     ...               + y0.T.dot(slsys.Qy).dot(y0)
     ...               + sum(yt.T.dot(slsys.Qy).dot(yt) for yt in ys[:-1])
     ...               + sum(0.5 * ρ * norm(vkt - slsys.E.dot(xt))
@@ -335,8 +335,10 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, ρ, traj_len):
     return ys, xs, us
 
 
-
 def test_transfer_separable_quad():
     slsys1, slsys2 = quadrotor_as_separable()
-    q_functon = partial(fake_proximal_q_function, slsys1)
-    planning_from_learned_q_function(q_functon, slsys2)
+    transfer_mpc_admm(slsys1, slsys2, y0, x0, ρ, traj_len)
+
+
+if __name__ == '__main__':
+    test_transfer_separable_quad()

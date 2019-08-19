@@ -642,15 +642,31 @@ class AffineFunction(Func):
         return "AffineFunction({}, {})".format(self.A, self.B)
 
 
+def norm(arr, axis):
+    return np.sqrt((arr**2).sum(axis=axis))
+
+
+def safe_div(x, y, default=1, thresh=1e-100):
+    return np.where(np.abs(y) < thresh, default, x / y)
+
+
 def randps(D, rng=np.random):
     """
-    Random positive definite square matrix?
+    Random positive-definite and full rank square matrix?
 
     https://math.stackexchange.com/questions/357980/how-to-generate-random-symmetric-positive-definite-matrices-using-matlab
+
+    >>> D = np.random.randint(100)
+    >>> R = randps(D)
+    >>> np.linalg.matrix_rank(R) >= D
+    True
+    >>> U, s, V = np.linalg.svd(R)
+    >>> (s >= 0).all()
+    True
     """
-    A = rng.rand(D,D)
-    Asym = 0.5 * (A + A.T)
-    return Asym + D*np.eye(D)
+    U = rng.rand(D,D)
+    U = safe_div(U, norm(U, axis=0))
+    return U.dot(np.eye(D)).dot(U.T)
 
 if __name__ == '__main__':
     import doctest
