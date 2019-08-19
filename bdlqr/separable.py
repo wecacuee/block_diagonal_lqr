@@ -19,6 +19,7 @@ from bdlqr.lqr import (LinearSystem, quadrotor_linear_system, plot_solution,
 from bdlqr.diff_substr import diff_substr
 from bdlqr.admm import admm
 from bdlqr.linalg import randps, ScalarQuadFunc, AffineFunction
+from bdlqr.functools import getname
 
 
 def solve_seq(slsys, y0, x0, traj_len):
@@ -201,6 +202,12 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                    Bu  = rng.rand(xD, uD),
                    T   = T)
 
+    @classmethod
+    def copy(cls, other, **overrides):
+        assert isinstance(other, cls)
+        odict = other._asdict()
+        return cls(**dict(odict, **overrides))
+
     def f_x(self, x0, u0):
         Ax = self.Ax
         Bu = self.Bu
@@ -380,14 +387,13 @@ def quadrotor_as_separable(m  = 1,
     QyT = np.array(Qy)*100
     return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T)))
 
-
-def plot_separable_sys_results(example=quadrotor_square_example, traj_len=30,
+def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
                                solvers=(solve_full, solve_seq, solve_admm),
                                line_specs='b.- g,-- ro cv m^ y< k>'.split()):
     plotables, y0, x0, *sepsys = example(r0=10)
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
-    labels = map(attrgetter('__name__'), solvers)
+    labels = map(getname, solvers)
     short_labels = diff_substr(labels)
     eff_traj_len = min(slsys.T, traj_len)
     for solver, label, lnfmt in zip(solvers, short_labels, line_specs):

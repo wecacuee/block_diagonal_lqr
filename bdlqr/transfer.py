@@ -10,10 +10,12 @@ import numpy as np
 from numpy.linalg import norm
 from scipy.optimize import fmin
 
-from bdlqr.separable import SeparableLinearSystem, joint_linear_system, solve_seq
+from bdlqr.separable import (SeparableLinearSystem, joint_linear_system,
+                             plot_separable_sys_results)
 from bdlqr.linalg import ScalarQuadFunc
 from bdlqr.lqr import affine_backpropagation, LinearSystem
 from bdlqr.admm import admm
+from bdlqr.functools import getdefaultkw
 
 
 
@@ -106,15 +108,8 @@ def proximal_env_linsys(slsys, ṽks, ρ, t):
 
     # IV(y₀) := arg min_v ∑ₜ yₜᵀQyₜ
     #         s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
-    slsys_remaining = SeparableLinearSystem(Qy=slsys.Qy,
-                                            R=slsys.R,
-                                            Ay=slsys.Ay,
-                                            Bv=slsys.Bv,
-                                            QyT=slsys.QyT,
-                                            E=slsys.E,
-                                            Ax=slsys.Ax,
-                                            Bu=slsys.Bu,
-                                            T=slsys.T - t - len(ṽks))
+    slsys_remaining = SeparableLinearSystem.copy(slsys,
+                                                 T=slsys.T - t - len(ṽks))
     IV, *_ = independent_cost_to_go(slsys_remaining)
     return LinearSystem(Ay, Bv, Qy, sy, Rsv, zsv, IV.Q, IV.l, len(Rsv))
 
@@ -316,7 +311,14 @@ def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t):
     return us[0]
 
 
-def transfer_mpc_admm(slsys1, slsys2, y0, x0, ρ, traj_len):
+def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1):
+    if slsys1 is None:
+        slsys1 = SeparableLinearSystem.copy(
+            slsys2,
+            R=np.zeros_like(slsys2.R),
+            Ax=np.zeros_like(slsys2.Ax),
+            Bu=np.ones_like(slsys2.Bu))
+
     def argmin_Q1(yt, ṽks, t):
         vfs, Vfs = proximal_env_solution(slsys1, ṽks, ρ, t)
         return vfs[0](yt)
@@ -336,6 +338,8 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, ρ, traj_len):
     ys, xs = slsys2.forward(y0, x0, us)
     return ys, xs, us
 
+def solve_by_transfer(slsys1):
+    return partial(transfer_mpc_admm, slsys1)
 
 def test_transfer_separable_quad():
     slsys1, slsys2 = quadrotor_as_separable()
@@ -343,8 +347,9 @@ def test_transfer_separable_quad():
     x0 = np.array([0.])
     ρ = 1
     traj_len = 3
-    transfer_mpc_admm(slsys1, slsys2, y0, x0, ρ, traj_len)
-
+    transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len)
 
 if __name__ == '__main__':
-    test_transfer_separable_quad()
+    plot_separable_sys_results(
+        solvers=list(getdefaultkw(plot_separable_sys_results, "solvers")) +
+        [solve_by_transfer(None)])
