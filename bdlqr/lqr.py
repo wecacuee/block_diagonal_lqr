@@ -225,6 +225,10 @@ class LinearSystem:
                 if return_min
                 else (xs[1:], us))
 
+    def __repr__(self):
+        return "LinearSystem({s.A}, {s.B}, {s.Q}, {s.s}, {s.R}, {s.z}, {s.Q_T}, {s.s_T}, {s.T}, {s.γ})".format(s=self)
+
+
 
 def quadrotor_linear_system(m=1,
                             r0=10,

@@ -77,7 +77,9 @@ def independent_cost_to_go(slsys, max_iter=100):
     """
     ind_env_linsys = independent_env_linsys(slsys)
     ufs, Vfs = ind_env_linsys.solve_f(max_iter=max_iter, return_min=True)
-    return list(Vfs)
+    ufs = list(ufs)
+    Vfs = list(Vfs)
+    return Vfs
 
 
 def proximal_env_linsys(slsys, ṽks, ρ, t):

@@ -51,11 +51,11 @@ def admm(proximals, x0, z0, w0, const_fn, ρ,
         if dual_feasibility_check:
             dual_feasibility_check(xk, zk, wk, err[0])
         xkp1 = proximals[0](xk, zk, wk, ρ)
-        LOG.debug(" xk[0]=%0.03f", xkp1[0])
+        LOG.debug(" x%d[0]=%0.03f", k, xkp1[0])
         zkp1 = proximals[1](xkp1, zk, wk, ρ)
-        LOG.debug(" zk[0]=%0.03f", zkp1[0])
+        LOG.debug(" z%d[0]=%0.03f", k, zkp1[0])
         wk   = wk + ρ*const_fn(np.hstack((xkp1, zkp1)))
-        LOG.debug(" wk[0]=%0.03f", wk[0])
+        LOG.debug(" w%d[0]=%0.03f", k, wk[0])
         change = norm(xk - xkp1) + norm(zk - zkp1)
         xk = xkp1
         zk = zkp1
