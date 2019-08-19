@@ -654,8 +654,6 @@ def randps(D, rng=np.random):
     """
     Random positive-definite and full rank square matrix?
 
-    https://math.stackexchange.com/questions/357980/how-to-generate-random-symmetric-positive-definite-matrices-using-matlab
-
     >>> D = np.random.randint(100)
     >>> R = randps(D)
     >>> np.linalg.matrix_rank(R) >= D
@@ -666,7 +664,7 @@ def randps(D, rng=np.random):
     """
     U = rng.rand(D,D)
     U = safe_div(U, norm(U, axis=0))
-    return U.dot(np.eye(D)).dot(U.T)
+    return U.dot(U.T)
 
 if __name__ == '__main__':
     import doctest
