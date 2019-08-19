@@ -223,10 +223,8 @@ class ScalarQuadFunc(Func):
 
     __add__ = add
 
-    def __getitem__(self, i):
-        if not isinstance(i, slice):
-            i = slice(i, i+1, 1)
-        return ScalarQuadFunc(self.Q[i, i], self.l[i], self.c)
+    def __getitem__(self, dmnslc):
+        return ScalarQuadFunc(self.Q[dmnslc, dmnslc], self.l[dmnslc], self.c)
 
     def add_concat(self, other):
         """
@@ -489,10 +487,9 @@ class AffineFunction(Func):
 
     __add__ = add
 
-    def __getitem__(self, i):
-        if not isinstance(i, slice):
-            i = slice(i, i+1, 1)
-        return type(self)(self.A[i, i], self.B[i])
+    def __getitem__(self, slice_):
+        (rngslc, dmnslc) = slice_
+        return type(self)(self.A[rngslc, dmnslc], self.B[rngslc])
 
     def concat_concat(self, other):
         """
@@ -642,7 +639,7 @@ class AffineFunction(Func):
         return "AffineFunction({}, {})".format(self.A, self.B)
 
 
-def norm(arr, axis):
+def norm(arr, axis=0):
     return np.sqrt((arr**2).sum(axis=axis))
 
 

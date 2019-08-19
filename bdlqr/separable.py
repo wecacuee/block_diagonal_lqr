@@ -201,21 +201,30 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                    Bu  = rng.rand(xD, uD),
                    T   = T)
 
-    def forward_x(self, x0, us):
+    def f_x(self, x0, u0):
         Ax = self.Ax
         Bu = self.Bu
+        return Ax.dot(x0) + Bu.dot(u0)
+
+    def forward_x(self, x0, us):
         xs = [x0]
         for t, ut in enumerate(us):
-            xs.append(Ax.dot(xs[-1]) + Bu.dot(ut))
+            xs.append(self.f_x(xs[t], ut))
         return xs[1:]
 
-    def forward_y(self, y0, vs):
+    def f_y(self, y0, v0):
         Ay = self.Ay
         Bv = self.Bv
+        return Ay.dot(y0) + Bv.dot(v0)
+
+    def forward_y(self, y0, vs):
         ys = [y0]
         for t, vt in enumerate(vs):
-            ys.append(Ay.dot(ys[-1]) + Bv.dot(vt))
+            ys.append(self.f_y(ys[-1], vt))
         return ys[1:]
+
+    def effect(self, x0):
+        return self.E.dot(x0)
 
     def forward(self, y0, x0, us):
         # Generate forward trajectory

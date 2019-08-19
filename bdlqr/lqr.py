@@ -133,12 +133,12 @@ class LinearSystem:
         if not s_T.shape == (xD,): raise ValueError()
 
         _check_shape("Q", Q, (xD, xD), T-1)
-        Qs_rev = (list(reversed(Q)) + [np.zeros_like(Q[0])]
+        Qs_rev = (list(reversed(Q)) + [np.zeros_like(Q_T)]
                   if isinstance(Q, list)
                   else repeat_maybe_inf(Q, T))
 
         _check_shape("s", s, (xD,), T-1)
-        ss_rev = (list(reversed(s)) + [np.zeros_like(s[0])]
+        ss_rev = (list(reversed(s)) + [np.zeros_like(s_T)]
                   if isinstance(s, list)
                   else repeat_maybe_inf(s, T))
 

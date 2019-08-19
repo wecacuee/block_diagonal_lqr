@@ -8,11 +8,13 @@ LOG.setLevel(INFO)
 
 import numpy as np
 from numpy.linalg import norm
+from scipy.optimize import fmin
+
 from bdlqr.separable import SeparableLinearSystem, joint_linear_system, solve_seq
 from bdlqr.linalg import ScalarQuadFunc
 from bdlqr.lqr import affine_backpropagation, LinearSystem
+from bdlqr.admm import admm
 
-from scipy.optimize import fmin
 
 
 class MaskEnvDynamics:
@@ -76,7 +78,7 @@ def independent_cost_to_go(slsys, max_iter=100):
     return list(Vfs)
 
 
-def proximal_env_linsys(slsys, ṽks, ρ):
+def proximal_env_linsys(slsys, ṽks, ρ, t):
     """
 
     Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ |vₜ - ṽₜ| + GV(yₖ₊₁)
@@ -98,14 +100,9 @@ def proximal_env_linsys(slsys, ṽks, ρ):
     #            yₜ₊₁   = Ay yₜ   + [Bv, 0] [vₜ]
     #                                       [ 1]
     sy  = np.zeros(yD)
-    zvh  = np.zeros(vhD)
     oyT = np.zeros(yD)
-    Bvh = np.hstack((Bv, np.zeros((yD, 1))))
-    ṽks_col_vec = [ṽt[:, None] for ṽt in ṽks]
-    Rsh = [0.5 * ρ * np.vstack((np.hstack((np.eye(vD),         - ṽt)),
-                                np.hstack((    - ṽt.T, ṽt.T.dot(ṽt)))))
-           for ṽt in ṽks_col_vec]
-
+    Rsv = [0.5 * ρ * np.eye(vD) for _ in ṽks]
+    zsv = [-0.5 * ρ * ṽt for ṽt in ṽks]
 
     # IV(y₀) := arg min_v ∑ₜ yₜᵀQyₜ
     #         s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
@@ -117,9 +114,9 @@ def proximal_env_linsys(slsys, ṽks, ρ):
                                             E=slsys.E,
                                             Ax=slsys.Ax,
                                             Bu=slsys.Bu,
-                                            T=slsys.T - len(ṽks))
+                                            T=slsys.T - t - len(ṽks))
     IV, *_ = independent_cost_to_go(slsys_remaining)
-    return LinearSystem(Ay, Bvh, Qy, sy, Rsh, zvh, IV.Q, IV.l, len(Rsh))
+    return LinearSystem(Ay, Bv, Qy, sy, Rsv, zsv, IV.Q, IV.l, len(Rsv))
 
 
 def proximal_robot_linsys(mslsys, vks, wks, ρ):
@@ -127,13 +124,13 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ):
 
     Vₚᵣₒₓ(xₜ, vsₜ₊₁:) = min_u uᵀRu + 0.5 ρ |Exₜ₊₁(u) + wₜ₊₁/ρ - vₜ₊₁|₂² + ∑ⁿₜ₌₁ uₜᵀRuₜ
     """
-    n = len(ṽks)
+    n = len(vks)
     E    = mslsys.E
     R    = mslsys.R
     Ax   = mslsys.Ax
     Bu   = mslsys.Bu
     T    = mslsys.T
-    assert len(ṽks) <= T
+    assert len(vks) <= T
 
     xD  = Ax.shape[-1]
     uD  = Bu.shape[-1]
@@ -146,18 +143,20 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ):
     Qxhs = [0.5 * ρ * np.vstack((np.hstack((E.T.dot(E), vdtp1)),
                                  np.hstack((vdtp1.T, vdtp1.T.dot(vdtp1)))))
            for vdtp1 in vdesired]
-    sxh  = np.zeros(xD)
+    sxh  = np.zeros(xhD)
     zu  = np.zeros(uD)
-    oyT = np.zeros(yD)
+    oyT = np.zeros(xhD)
     Axh = np.eye(xhD)
     Axh[:-1, :-1] = Ax
-    Buh = np.vstack((Bv, np.zeros((1, uD))))
+    Buh = np.vstack((Bu, np.zeros((1, uD))))
     return LinearSystem(Axh, Buh, Qxhs[:-1], sxh, R, zu, Qxhs[-1], sxh, len(Qxhs))
 
 
 def proximal_robot_solution(mslsys, vks, wks, ρ):
-    sys = proximal_robot_linsys(mslsys, vks, wks, ρ)
-    ufs, Vfs = sys.solve_f(return_min=True)
+    sys_h = proximal_robot_linsys(mslsys, vks, wks, ρ)
+    ufhs, Vfhs = sys_h.solve_f(return_min=True)
+    ufs = [ufht[:, :-1] for ufht in ufhs]
+    Vfs = [Vfht[:-1] for Vfht in ufhs]
     return list(ufs), list(Vfs)
 
 
@@ -191,8 +190,8 @@ def proximal_env_solution(slsys, ṽks, ρ, t):
     ...                     for xt, vkt in zip(xs, vks))).all()
     True
     """
-    prox_env_sys = proximal_env_linsys(slsys, ṽks, ρ)
-    ufs, Vfs = prox_env_sys.solve_f(t=t, return_min=True)
+    prox_env_sys = proximal_env_linsys(slsys, ṽks, ρ, t)
+    ufs, Vfs = prox_env_sys.solve_f(return_min=True)
     return list(ufs), list(Vfs)
 
 
@@ -298,24 +297,22 @@ def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t):
     vD = mslsys2.E.shape[0]
     E = mslsys2.E
     def prox_v(_, us, ws, ρ):
-        ṽt = E.dot(xt)
-        ṽs = [E.dot((Ax.dot(xt) + Bu.dot(ut))) + wt/ρ
-              for ut, wt in zip(us, ws)]
+        ṽs = [E.dot(mslsys2.f_x(xt, us[0])) + ws[0]/ρ]
         vt = argmin_Q1(yt, ṽs, t)
         vs = vt.reshape(1, -1)
         return vs
 
     def prox_u(vs, _, ws, ρ):
         ufs, Vfs = proximal_robot_solution(mslsys2, vs, ws, ρ)
-        uf0 = next(ufs)
+        uf0 = ufs[0]
         us = uf0(xt).reshape(1, -1)
         return us
 
-    us0 = np.zeros(1, uD)
-    ws0 = np.zeros(1, vD)
+    us0 = np.zeros((1, uD))
+    ws0 = np.zeros((1, vD))
     vs0 = E.dot(xt).reshape(1, -1)
     const_fn = partial(mslsys2.constraint_fn, yt, xt)
-    vs, us, ws = admm((prox_v, prox_u), vs0, us0, ws0, const_fn)
+    vs, us, ws = admm((prox_v, prox_u), vs0, us0, ws0, const_fn, ρ)
     return us[0]
 
 
@@ -327,16 +324,25 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, ρ, traj_len):
     mslsys1 = MaskEnvDynamics(slsys1)
     mslsys2 = MaskEnvDynamics(slsys2)
     us = []
+    ys = [y0]
+    xs = [x0]
     for t in range(traj_len):
-        ut = solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t)
+        ut = solve_mpc_admm(argmin_Q1, mslsys2, ys[t], xs[t], ρ, t)
         us.append(ut)
+        xs.append(slsys2.f_x(xs[t], ut))
+        vt = slsys2.effect(xs[t])
+        ys.append(slsys2.f_y(ys[t], vt))
 
-    ys, xs,slsys2.forward(y0, x0, us)
+    ys, xs = slsys2.forward(y0, x0, us)
     return ys, xs, us
 
 
 def test_transfer_separable_quad():
     slsys1, slsys2 = quadrotor_as_separable()
+    y0 = np.array([0.])
+    x0 = np.array([0.])
+    ρ = 1
+    traj_len = 3
     transfer_mpc_admm(slsys1, slsys2, y0, x0, ρ, traj_len)
 
 
