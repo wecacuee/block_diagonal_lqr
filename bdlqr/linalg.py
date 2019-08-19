@@ -664,7 +664,7 @@ def randps(D, rng=np.random):
     """
     U = rng.rand(D,D)
     U = safe_div(U, norm(U, axis=0))
-    return U.dot(U.T)
+    return U.T.dot(U)
 
 if __name__ == '__main__':
     import doctest
