@@ -16,7 +16,7 @@ from bdlqr.separable import (SeparableLinearSystem, joint_linear_system,
 from bdlqr.linalg import ScalarQuadFunc
 from bdlqr.lqr import LinearSystem
 from bdlqr.admm import admm
-from bdlqr.functools import getdefaultkw
+from bdlqr.functoolsplus import getdefaultkw
 
 
 class MaskEnvDynamics:
@@ -380,12 +380,16 @@ def test_transfer_separable_quad():
 def main():
     plot_separable_sys_results_ = recpartial(
         plot_separable_sys_results, {
-            "example.γ": 0.9,
             "example.T": 4,
+            "example.r0": 0,
             "example.y0": [0],
             "example.x0": [0.1],
-            "getsolvers_": list_extendable([partial(transfer_mpc_admm, None)])
-        })
+            "getsolvers_": list_extendable(
+                [partial(
+                    recpartial(
+                        transfer_mpc_admm,
+                        { "solve_mpc_admm_.admm_.max_iter": 2 }),
+                    None)])})
     plot_separable_sys_results_()
 
 

@@ -19,7 +19,7 @@ from bdlqr.lqr import (LinearSystem, quadrotor_linear_system, plot_solution,
 from bdlqr.diff_substr import diff_substr
 from bdlqr.admm import admm
 from bdlqr.linalg import randps, ScalarQuadFunc, AffineFunction
-from bdlqr.functools import getname
+from bdlqr.functoolsplus import getname, list_extendable
 
 
 def solve_seq(slsys, y0, x0, traj_len):
@@ -390,20 +390,11 @@ def quadrotor_as_separable(m  = 1,
     return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T, γ)))
 
 
-def list_extend(L, iterable=[]):
-    L.extend(iterable)
-    return L
-
-
-def list_extendable(L):
-    return partial(list_extend, L)
-
-
 def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
                                getsolvers_=list_extendable(
                                    [solve_full, solve_seq, solve_admm]),
                                line_specs='b.- g,-- ro cv- m^- y<- k>-'.split()):
-    plotables, y0, x0, *sepsys = example(r0=10)
+    plotables, y0, x0, *sepsys = example()
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
     solvers = getsolvers_()
@@ -441,7 +432,7 @@ def test_solvers_with_full(seed=None, getsolvers_=list_extendable([solve_admm]),
     y0 = rng.rand(yD)
     x0 = rng.rand(xD)
     ys_full, xs_full, us_full = solve_full(slsys, y0, x0, T)
-    for solver in solvers:
+    for solver in getsolvers_():
         ys, xs, us = solver(slsys, y0, x0, T)
         assert np.allclose(us, us_full, rtol=1e-2, atol=1e-2)
     return True
