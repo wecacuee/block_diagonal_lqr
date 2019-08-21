@@ -256,12 +256,14 @@ def quadrotor_linear_system(m=1,
 
 
 def plot_solution(Ts, ylabel_ydata, axes=None,
-                  plot_fn=partial(Axes.plot, label='-')):
+                  plot_fn=partial(Axes.plot, label='-'),
+                  figtitle=''):
     if axes is None:
         LOG.info("Creating a new figure")
         fig = plt.figure()
         axes = fig.subplots(2,2).ravel().tolist()
         fig.subplots_adjust(wspace=0.32)
+        fig.suptitle(figtitle)
 
     legend_plotted = False
     for ax, (ylabel, ydata) in zip(axes, ylabel_ydata):

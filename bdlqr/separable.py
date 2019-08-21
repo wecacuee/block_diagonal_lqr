@@ -3,7 +3,7 @@ import math
 from functools import partial
 from collections import namedtuple, deque
 from operator import attrgetter
-from itertools import zip_longest
+from itertools import zip_longest, product
 from logging import getLogger, DEBUG, basicConfig
 basicConfig()
 LOG = getLogger(__name__)
@@ -13,6 +13,7 @@ import numpy as np
 from numpy.linalg import norm
 import matplotlib.pyplot as plt
 from matplotlib.axes import Axes
+from kwplus.functools import recpartial
 
 from bdlqr.lqr import (LinearSystem, quadrotor_linear_system, plot_solution,
                        affine_backpropagation)
@@ -409,7 +410,8 @@ def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
         fig = plot_solution(np.arange(eff_traj_len),
                             plotables(ys_full, xs_full, us_full, slsys, eff_traj_len),
                             axes= None if fig is None else fig.axes,
-                            plot_fn=lambda ax, x, y: Axes.plot(ax, x, y, lnfmt, label=label))
+                            plot_fn=lambda ax, x, y: Axes.plot(ax, x, y, lnfmt, label=label),
+                            figtitle="R={}, x0={}, y0={}".format(slsys.R, x0, y0))
     if fig is not None:
         fig.show()
         plt.show()
@@ -439,6 +441,20 @@ def test_solvers_with_full(seed=None, getsolvers_=list_extendable([solve_admm]),
 
 
 if __name__ == '__main__':
-    test_solvers_with_full()
     plot_separable_sys_results(example=quadrotor_as_separable)
+    for x0, y0 in product([0.1, 0.0], repeat=2):
+        recpartial(
+            plot_separable_sys_results,{
+                "example.y0": [y0],
+                "example.x0": [x0]
+            })()
+    for r0 in map(np.exp, range(-2, 3)):
+        recpartial(
+            plot_separable_sys_results,{
+                "example.r0": r0
+            })()
+    test_solvers_with_full()
+
+
+
 

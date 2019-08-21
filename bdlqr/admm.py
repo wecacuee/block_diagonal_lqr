@@ -67,6 +67,13 @@ def admm(proximals, x0, z0, w0, const_fn, ρ,
             LOG.debug("breaking after {} < {} iterations with change = {} < {}"
                       .format(k, max_iter, change, thresh))
             break
+        if (
+                any((np.isnan(a).any() for a in [xk, zk, wk]))
+                or any((np.isnan(a).any() for a in [xk, zk, wk]))
+        ):
+            raise RuntimeError(
+                "Either of xk, zk, wk is nan or inf:\n xk={}, zk={}, wk={}"
+                .format(xk=xk, zk=zk, wk=wk))
     return xk, zk, wk
 
 
