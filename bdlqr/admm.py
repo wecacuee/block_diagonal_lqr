@@ -31,7 +31,7 @@ def admm_wk(xk, zk, const_fn, grads):
 
 def admm(proximals, x0, z0, w0, const_fn, ρ,
          dual_feasibility_check=None, objs=(), grads=(),
-         max_iter=100, thresh=1e-4):
+         max_iter=100, thresh=1e-4, debug_print_len=3):
     """
     Run admm for
 
@@ -46,16 +46,17 @@ def admm(proximals, x0, z0, w0, const_fn, ρ,
     xk = x0
     zk = z0
     wk = w0
+    dpk = min(debug_print_len, len(x0))
 
     for k in range(max_iter):
         if dual_feasibility_check:
             dual_feasibility_check(xk, zk, wk, err[0])
         xkp1 = proximals[0](xk, zk, wk, ρ)
-        LOG.debug(" x%d[0]=%0.03f", k, xkp1[0])
+        LOG.debug(" x%d[:%d]=%s", k, dpk, xkp1[:dpk])
         zkp1 = proximals[1](xkp1, zk, wk, ρ)
-        LOG.debug(" z%d[0]=%0.03f", k, zkp1[0])
+        LOG.debug(" z%d[:%d]=%s", k, dpk, zkp1[:dpk])
         wk   = wk + ρ*const_fn(np.hstack((xkp1, zkp1)))
-        LOG.debug(" w%d[0]=%0.03f", k, wk[0])
+        LOG.debug(" w%d[:%d]=%s", k, dpk, wk[:dpk])
         change = norm(xk - xkp1) + norm(zk - zkp1)
         xk = xkp1
         zk = zkp1

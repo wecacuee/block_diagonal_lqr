@@ -147,7 +147,7 @@ def solve_full(slsys, y0, x0, traj_len):
     return ys, xs, us
 
 
-def solve_admm(slsys, y0, x0, traj_len, ε=1e-6, ρ=1, max_iter=5000):
+def solve_admm(slsys, y0, x0, traj_len, ρ=1, admm_=admm):
     """
     Solve the two minimizations alternatively:
 
@@ -168,12 +168,11 @@ def solve_admm(slsys, y0, x0, traj_len, ε=1e-6, ρ=1, max_iter=5000):
 
     cost_y = slsys.cost_v(y0, vs0)
     cost_u = slsys.cost_u(us0)
-    vs, us, ws = admm((partial(slsys.prox_f_v, y0, x0),
-                       partial(slsys.prox_g_u, y0, x0)),
-                      vs0, us0, ws0,
-                      partial(slsys.constraint_fn, y0, x0), ρ,
-                      objs=(partial(slsys.cost_v, y0), slsys.cost_u),
-                      max_iter=max_iter, thresh=ϵ)
+    vs, us, ws = admm_((partial(slsys.prox_f_v, y0, x0),
+                        partial(slsys.prox_g_u, y0, x0)),
+                       vs0, us0, ws0,
+                       partial(slsys.constraint_fn, y0, x0), ρ,
+                       objs=(partial(slsys.cost_v, y0), slsys.cost_u))
     ys, xs = slsys.forward(y0, x0, us)
     return ys, xs, us
 
@@ -229,7 +228,7 @@ class SeparableLinearSystem(_SeparableLinearSystem):
     def forward_y(self, y0, vs):
         ys = [y0]
         for t, vt in enumerate(vs):
-            ys.append(self.f_y(ys[-1], vt))
+            ys.append(self.f_y(ys[t], vt))
         return ys[1:]
 
     def effect(self, x0):
@@ -241,7 +240,8 @@ class SeparableLinearSystem(_SeparableLinearSystem):
 
         xs = self.forward_x(x0, us)
         vs = [E.dot(xt) for xt in xs]
-        ys = self.forward_y(y0, vs)
+        y1 = self.f_y(y0, E.dot(x0))
+        ys = self.forward_y(y1, vs)
 
         return ys, xs
 
@@ -303,6 +303,7 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                                Qxs[-1],  np.zeros(Qxs[-1].shape[0]),
                                len(vs))
         xhs_new, us_new, usmin = x_sys.solve(x0h, len(vs), return_min=True)
+        LOG.debug(" xhs[:3]=%s", xhs_new)
         assert len(xhs_new) == len(vs)
         assert len(us_new) == len(vs)
         return np.vstack(us_new)
@@ -337,6 +338,7 @@ class SeparableLinearSystem(_SeparableLinearSystem):
                               Rsv, zsv,
                               QyT, np.zeros(QyT.shape[0]), len(us))
         ys_new, vs_new, vsmin = y_sys.solve(y1, len(us), return_min=True)
+        LOG.debug(" ys[:3]=%s", ys_new)
         assert len(vs_new) == len(us)
         assert len(ys_new) == len(vs_new)
         return np.vstack(vs_new)
@@ -411,7 +413,7 @@ def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
                             plotables(ys_full, xs_full, us_full, slsys, eff_traj_len),
                             axes= None if fig is None else fig.axes,
                             plot_fn=lambda ax, x, y: Axes.plot(ax, x, y, lnfmt, label=label),
-                            figtitle="R={}, x0={}, y0={}".format(slsys.R, x0, y0))
+                            figtitle="Q={}, R={}, x0={}, y0={}".format(slsys.Qy, slsys.R, x0, y0))
     if fig is not None:
         fig.show()
         plt.show()
@@ -441,7 +443,14 @@ def test_solvers_with_full(seed=None, getsolvers_=list_extendable([solve_admm]),
 
 
 if __name__ == '__main__':
-    plot_separable_sys_results(example=quadrotor_as_separable)
+    recpartial(
+        plot_separable_sys_results,{
+            "example.T": 4,
+            "example.y0": [0.0],
+            "example.x0": [10.0]
+        })()
+    import sys
+    sys.exit(0)
     for x0, y0 in product([0.1, 0.0], repeat=2):
         recpartial(
             plot_separable_sys_results,{

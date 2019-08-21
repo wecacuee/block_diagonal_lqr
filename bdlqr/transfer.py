@@ -381,7 +381,7 @@ def main():
     plot_separable_sys_results_ = recpartial(
         plot_separable_sys_results, {
             "example.T": 30,
-            "example.r0": 1,
+            "example.r0": 0.01,
             "example.y0": [-0.0],
             "example.x0": [0.1],
             #"getsolvers_.iterable":
