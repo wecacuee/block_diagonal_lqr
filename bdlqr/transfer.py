@@ -155,9 +155,7 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ):
 def proximal_robot_solution(mslsys, vks, wks, ρ):
     sys_h = proximal_robot_linsys(mslsys, vks, wks, ρ)
     ufhs, Vfhs = sys_h.solve_f(return_min=True)
-    ufs = [ufht[:, :-1] for ufht in ufhs]
-    Vfs = [Vfht[:-1] for Vfht in ufhs]
-    return list(ufs), list(Vfs)
+    return list(ufhs), list(Vfhs)
 
 
 def proximal_env_solution(slsys, ṽks, ρ, t):
@@ -291,29 +289,31 @@ def quadrotor_as_separable(Ay  = [[1.]],
             SeparableLinearSystem(*map(np.array, (Qy, R2, Ay, Bv, QyT, E2, Ax2, Bu2, T, γ))))
 
 
-def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, V1=None, admm_fn=admm):
+def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, V1=None, admm_fn=admm, k_mpc=1):
     """
     """
+    if k_mpc != 1: raise NotImplementedError()
     uD = mslsys2.Bu.shape[-1]
     vD = mslsys2.E.shape[0]
-    E = mslsys2.E
+    E  = mslsys2.E
     def prox_v(_, us, ws, ρ):
+        if len(us) != k_mpc: raise NotImplementedError()
+        if len(ws) != k_mpc: raise NotImplementedError()
         ṽs = [E.dot(mslsys2.f_x(xt, us[0])) + ws[0]/ρ]
         vt = argmin_Q1(yt, ṽs, t)
-        if V1 is not None:
-            LOG.debug("V1={}".format([V1(yt, ṽs, t)
-                                      for t in range(mslsys2.T-1)]))
         vs = vt.reshape(1, -1)
         return vs
 
     def prox_u(vs, _, ws, ρ):
-        ufs, Vfs = proximal_robot_solution(mslsys2, vs, ws, ρ)
-        uf0 = ufs[0]
-        us = uf0(xt).reshape(1, -1)
+        if len(vs) != k_mpc: raise NotImplementedError()
+        if len(ws) != k_mpc: raise NotImplementedError()
+        ufhs, Vfhs = proximal_robot_solution(mslsys2, vs, ws, ρ)
+        ufh0 = ufhs[0]
+        us = ufh0(np.hstack((xt, [1]))).reshape(1, -1)
         return us
 
     us0 = np.zeros((1, uD))
-    ws0 = np.zeros((1, vD))
+    ws0 = -np.ones((1, vD))
     vs0 = E.dot(xt).reshape(1, -1)
     const_fn = partial(mslsys2.constraint_fn, yt, xt)
     vs, us, ws = admm_fn((prox_v, prox_u), vs0, us0, ws0, const_fn, ρ)
@@ -374,13 +374,19 @@ def test_transfer_separable_quad():
     transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len)
 
 if __name__ == '__main__':
+    # configure mpc solver
     transfer_mpc_admm_fn = recpartial(
         transfer_mpc_admm,
-        {"solve_mpc_admm_fn.admm_fn.max_iter": 2})
-    plot_separable_sys_results(
-        example=partial(
-            getdefaultkw(plot_separable_sys_results, "example"), γ=0.9),
-        solvers=
-        #list(getdefaultkw(plot_separable_sys_results, "solvers")) +
-        [partial(transfer_mpc_admm_fn, None)],
-        traj_len=4)
+        {"solve_mpc_admm_fn.admm_fn.max_iter": 100,
+         "ρ": 1})
+
+    default_solvers = getdefaultkw(plot_separable_sys_results, "solvers")
+    recpartial(
+        plot_separable_sys_results,
+        { "example.γ": 0.9,
+          "example.T": 4,
+          "example.r0": 0,
+          "example.y0": [0],
+          "solvers" : list(default_solvers) + [partial(transfer_mpc_admm_fn, None)],
+          "traj_len": 30 }
+    )()

@@ -382,7 +382,7 @@ def quadrotor_as_separable(m  = 1,
                            Ax = [[1.]],
                            y0 = [-1],
                            x0 = [0],
-                           T  = 4,
+                           T  = 30,
                            γ  = 1):
     Bu=[[1/m]]
     R=[[r0]]
@@ -391,7 +391,7 @@ def quadrotor_as_separable(m  = 1,
 
 def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
                                solvers=(solve_full, solve_seq, solve_admm),
-                               line_specs='b.- g,-- ro cv m^ y< k>'.split()):
+                               line_specs='b.- g,-- ro cv- m^- y<- k>-'.split()):
     plotables, y0, x0, *sepsys = example(r0=10)
     fig = None
     slsys = SeparableLinearSystem(*sepsys)

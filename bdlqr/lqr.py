@@ -263,10 +263,13 @@ def plot_solution(Ts, ylabel_ydata, axes=None,
         axes = fig.subplots(2,2).ravel().tolist()
         fig.subplots_adjust(wspace=0.32)
 
+    legend_plotted = False
     for ax, (ylabel, ydata) in zip(axes, ylabel_ydata):
         plot_fn(ax, Ts, ydata)
         ax.set_ylabel(ylabel)
-        ax.legend()
+        if not legend_plotted:
+            ax.legend()
+            legend_plotted = True
     return axes[0].figure
 
 
