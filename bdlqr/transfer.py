@@ -12,7 +12,7 @@ from scipy.optimize import fmin
 from kwplus.functools import recpartial
 
 from bdlqr.separable import (SeparableLinearSystem, joint_linear_system,
-                             plot_separable_sys_results)
+                             plot_separable_sys_results, list_extendable)
 from bdlqr.linalg import ScalarQuadFunc
 from bdlqr.lqr import LinearSystem
 from bdlqr.admm import admm
@@ -289,7 +289,7 @@ def quadrotor_as_separable(Ay  = [[1.]],
             SeparableLinearSystem(*map(np.array, (Qy, R2, Ay, Bv, QyT, E2, Ax2, Bu2, T, γ))))
 
 
-def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, V1=None, admm_fn=admm, k_mpc=1):
+def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, V1=None, admm_=admm, k_mpc=1):
     """
     """
     if k_mpc != 1: raise NotImplementedError()
@@ -313,10 +313,10 @@ def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, V1=None, admm_fn=admm, k_m
         return us
 
     us0 = np.zeros((1, uD))
-    ws0 = -np.ones((1, vD))
+    ws0 = np.zeros((1, vD))
     vs0 = E.dot(xt).reshape(1, -1)
-    const_fn = partial(mslsys2.constraint_fn, yt, xt)
-    vs, us, ws = admm_fn((prox_v, prox_u), vs0, us0, ws0, const_fn, ρ)
+    const_ = partial(mslsys2.constraint_fn, yt, xt)
+    vs, us, ws = admm_((prox_v, prox_u), vs0, us0, ws0, const_, ρ)
     return us[0]
 
 
@@ -333,7 +333,10 @@ def training_system_equal(slsys2):
 
 
 def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1,
-                      solve_mpc_admm_fn=solve_mpc_admm):
+                      solve_mpc_admm_=solve_mpc_admm):
+    """
+    @param solve_mpc_admm_: Pre-configured solve_mpc_admm
+    """
     if slsys1 is None:
         slsys1 = training_system_equal(slsys2)
 
@@ -351,7 +354,7 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1,
     ys = [y0]
     xs = [x0]
     for t in range(traj_len):
-        ut = solve_mpc_admm_fn(argmin_Q1, mslsys2, ys[t], xs[t], ρ, t, V1=V1)
+        ut = solve_mpc_admm_(argmin_Q1, mslsys2, ys[t], xs[t], ρ, t, V1=V1)
         us.append(ut)
         xs.append(slsys2.f_x(xs[t], ut))
         vt = slsys2.effect(xs[t])
@@ -373,20 +376,18 @@ def test_transfer_separable_quad():
     traj_len = 3
     transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len)
 
-if __name__ == '__main__':
-    # configure mpc solver
-    transfer_mpc_admm_fn = recpartial(
-        transfer_mpc_admm,
-        {"solve_mpc_admm_fn.admm_fn.max_iter": 100,
-         "ρ": 1})
 
-    default_solvers = getdefaultkw(plot_separable_sys_results, "solvers")
-    recpartial(
-        plot_separable_sys_results,
-        { "example.γ": 0.9,
-          "example.T": 4,
-          "example.r0": 0,
-          "example.y0": [0],
-          "solvers" : list(default_solvers) + [partial(transfer_mpc_admm_fn, None)],
-          "traj_len": 30 }
-    )()
+def main():
+    plot_separable_sys_results_ = recpartial(
+        plot_separable_sys_results, {
+            "example.γ": 0.9,
+            "example.T": 4,
+            "example.y0": [0],
+            "example.x0": [0.1],
+            "getsolvers_": list_extendable([partial(transfer_mpc_admm, None)])
+        })
+    plot_separable_sys_results_()
+
+
+if __name__ == '__main__':
+    main()

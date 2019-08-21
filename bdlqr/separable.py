@@ -389,12 +389,24 @@ def quadrotor_as_separable(m  = 1,
     QyT = np.array(Qy)*100
     return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T, γ)))
 
+
+def list_extend(L, iterable=[]):
+    L.extend(iterable)
+    return L
+
+
+def list_extendable(L):
+    return partial(list_extend, L)
+
+
 def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
-                               solvers=(solve_full, solve_seq, solve_admm),
+                               getsolvers_=list_extendable(
+                                   [solve_full, solve_seq, solve_admm]),
                                line_specs='b.- g,-- ro cv- m^- y<- k>-'.split()):
     plotables, y0, x0, *sepsys = example(r0=10)
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
+    solvers = getsolvers_()
     labels = map(getname, solvers)
     short_labels = diff_substr(labels)
     eff_traj_len = min(slsys.T, traj_len)
@@ -412,7 +424,8 @@ def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
         plt.show()
 
 
-def test_solvers_with_full(seed=None, solvers=[solve_admm], maxD=15, maxT=100):
+def test_solvers_with_full(seed=None, getsolvers_=list_extendable([solve_admm]),
+                           maxD=15, maxT=100):
     """
 
     >>> test_solvers_with_full()

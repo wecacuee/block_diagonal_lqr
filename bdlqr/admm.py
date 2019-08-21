@@ -3,7 +3,7 @@ from functools import partial
 from logging import basicConfig, getLogger, DEBUG, INFO
 basicConfig()
 LOG = getLogger(__name__)
-LOG.setLevel(INFO)
+LOG.setLevel(DEBUG)
 
 import numpy as np
 from numpy.linalg import norm
@@ -64,7 +64,7 @@ def admm(proximals, x0, z0, w0, const_fn, ρ,
                 LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", objs[0](xk) , objs[1](zk))
             LOG.debug(" |Ax+Bz-c|=%0.03f", norm(const_fn(np.hstack((xk, zk)))[0]))
         if change < thresh:
-            LOG.info("breaking after {} < {} iterations with change = {} < {}"
+            LOG.debug("breaking after {} < {} iterations with change = {} < {}"
                       .format(k, max_iter, change, thresh))
             break
     return xk, zk, wk
