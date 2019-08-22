@@ -4,10 +4,10 @@ from functools import partial
 from collections import namedtuple, deque
 from operator import attrgetter
 from itertools import zip_longest, product
-from logging import getLogger, DEBUG, basicConfig
+from logging import getLogger, INFO, DEBUG, basicConfig
 basicConfig()
 LOG = getLogger(__name__)
-LOG.setLevel(DEBUG)
+LOG.setLevel(INFO)
 
 import numpy as np
 from numpy.linalg import norm
@@ -443,14 +443,6 @@ def test_solvers_with_full(seed=None, getsolvers_=list_extendable([solve_admm]),
 
 
 if __name__ == '__main__':
-    recpartial(
-        plot_separable_sys_results,{
-            "example.T": 4,
-            "example.y0": [0.0],
-            "example.x0": [10.0]
-        })()
-    import sys
-    sys.exit(0)
     for x0, y0 in product([0.1, 0.0], repeat=2):
         recpartial(
             plot_separable_sys_results,{

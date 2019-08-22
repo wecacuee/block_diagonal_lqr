@@ -124,6 +124,8 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ):
 
     Vₚᵣₒₓ(xₜ, vsₜ₊₁:) = min_u uᵀRu + 0.5 ρ |Exₜ₊₁(u) + wₜ₊₁/ρ - vₜ₊₁|₂² + ∑ⁿₜ₌₁ uₜᵀRuₜ
     """
+    # vks = [vₜ₊₁]
+    # wks = [wₜ₊₁]
     n = len(vks)
     E    = mslsys.E
     R    = mslsys.R
@@ -289,27 +291,45 @@ def quadrotor_as_separable(Ay  = [[1.]],
             SeparableLinearSystem(*map(np.array, (Qy, R2, Ay, Bv, QyT, E2, Ax2, Bu2, T, γ))))
 
 
-def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, V1=None, admm_=admm, k_mpc=1):
+def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, admm_=admm, k_mpc=1):
     """
     """
     if k_mpc != 1: raise NotImplementedError()
     uD = mslsys2.Bu.shape[-1]
     vD = mslsys2.E.shape[0]
     E  = mslsys2.E
+
+    # vt is determined
+    vt = E.dot(xt)
+    # yₜ₊₁ is determined but cannot be used, because we do not know environment
+    # dynamics:
+    # yₜ₊₁ = f(yₜ, vₜ)
+    # We are solving for uₜ, vₜ₊₁, xₜ₊₁, yₜ₊₂
     def prox_v(_, us, ws, ρ):
+        # _  = vs = [vₜ₊₁]
+        # us = [uₜ]
+        # ws = [wₜ₊₁]
         if len(us) != k_mpc: raise NotImplementedError()
         if len(ws) != k_mpc: raise NotImplementedError()
         ṽs = [E.dot(mslsys2.f_x(xt, us[0])) + ws[0]/ρ]
-        vt = argmin_Q1(yt, ṽs, t)
-        vs = vt.reshape(1, -1)
+
+        # We want argmin_Q1 to give two step ahead prediction
+        # vₜ₊₁ = arg minᵥ vₜ R vₜ + V(yₜ₊₂(yₜ, uₜ))
+        vtp1 = argmin_Q1(yt, vt, ṽs, t)
+        vs = vtp1.reshape(1, -1)
+        # vs = [vₜ₊₁]
         return vs
 
     def prox_u(vs, _, ws, ρ):
+        # vs = [vₜ₊₁]
+        # _ = us = [uₜ]
+        # ws = [wₜ₊₁]
         if len(vs) != k_mpc: raise NotImplementedError()
         if len(ws) != k_mpc: raise NotImplementedError()
         ufhs, Vfhs = proximal_robot_solution(mslsys2, vs, ws, ρ)
         ufh0 = ufhs[0]
         us = ufh0(np.hstack((xt, [1]))).reshape(1, -1)
+        # us = [uₜ]
         return us
 
     us0 = np.zeros((1, uD))
@@ -340,13 +360,12 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1,
     if slsys1 is None:
         slsys1 = training_system_equal(slsys2)
 
-    def V1(yt, ṽks, t):
-        vfs, Vfs = proximal_env_solution(slsys1, ṽks, ρ, t)
-        return Vfs[0](yt)
-
-    def argmin_Q1(yt, ṽks, t):
-        vfs, Vfs = proximal_env_solution(slsys1, ṽks, ρ, t)
-        return vfs[0](yt)
+    def argmin_Q1(yt, vt, ṽks, t):
+        # ṽks = [ṽₜ₊₁]
+        # vₜ₊₁ = arg minᵥ vₜ R vₜ + V(yₜ₊₂(yₜ, uₜ))
+        ytp1 = slsys1.f_y(yt, vt)
+        vfs, Vfs = proximal_env_solution(slsys1, ṽks, ρ, t+1)
+        return vfs[0](ytp1)
 
     mslsys1 = MaskEnvDynamics(slsys1)
     mslsys2 = MaskEnvDynamics(slsys2)
@@ -354,7 +373,7 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1,
     ys = [y0]
     xs = [x0]
     for t in range(traj_len):
-        ut = solve_mpc_admm_(argmin_Q1, mslsys2, ys[t], xs[t], ρ, t, V1=V1)
+        ut = solve_mpc_admm_(argmin_Q1, mslsys2, ys[t], xs[t], ρ, t)
         us.append(ut)
         xs.append(slsys2.f_x(xs[t], ut))
         vt = slsys2.effect(xs[t])
@@ -381,15 +400,14 @@ def main():
     plot_separable_sys_results_ = recpartial(
         plot_separable_sys_results, {
             "example.T": 30,
-            "example.r0": 0.01,
             "example.y0": [-0.0],
             "example.x0": [0.1],
-            #"getsolvers_.iterable":
-            #    [partial(
-            #        recpartial(
-            #            transfer_mpc_admm,
-            #            { "solve_mpc_admm_.admm_.max_iter": 2 }),
-            #        None)]
+            "getsolvers_.iterable":
+                ([partial(
+                    recpartial(
+                        transfer_mpc_admm,
+                        { "solve_mpc_admm_.admm_.max_iter": 2 }),
+                    None)])
         })
     plot_separable_sys_results_()
 
