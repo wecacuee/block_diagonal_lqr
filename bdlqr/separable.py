@@ -1,5 +1,6 @@
 import warnings
 import math
+from os.path import join as pjoin
 from functools import partial
 from collections import namedtuple, deque
 from operator import attrgetter
@@ -396,7 +397,9 @@ def quadrotor_as_separable(m  = 1,
 def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
                                getsolvers_=list_extendable(
                                    [solve_full, solve_seq, solve_admm]),
-                               line_specs='b.- g,-- ro cv- m^- y<- k>-'.split()):
+                               line_specs='b.- g,-- ro cv- m^- y<- k>-'.split(),
+                               plot_dir="/tmp/",
+                               fig_string_fmt="Q={Q}, R={R}, x0={x0}, y0={y0}".format):
     plotables, y0, x0, *sepsys = example()
     fig = None
     slsys = SeparableLinearSystem(*sepsys)
@@ -404,17 +407,20 @@ def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
     labels = map(getname, solvers)
     short_labels = diff_substr(labels)
     eff_traj_len = min(slsys.T, traj_len)
+    fig_string = fig_string_fmt(Q=slsys.Qy, R=slsys.R, x0=x0, y0=y0)
     for solver, label, lnfmt in zip(solvers, short_labels, line_specs):
         ys_full, xs_full, us_full = solver(slsys, y0, x0, eff_traj_len)
         y1 = slsys.Ay.dot(y0) + slsys.Bv.dot(slsys.E).dot(x0)
         ys_full = np.vstack((y0, y1, ys_full))
         xs_full = np.vstack((x0, xs_full))
-        fig = plot_solution(np.arange(eff_traj_len),
-                            plotables(ys_full, xs_full, us_full, slsys, eff_traj_len),
-                            axes= None if fig is None else fig.axes,
-                            plot_fn=lambda ax, x, y: Axes.plot(ax, x, y, lnfmt, label=label),
-                            figtitle="Q={}, R={}, x0={}, y0={}".format(slsys.Qy, slsys.R, x0, y0))
+        fig = plot_solution(
+            np.arange(eff_traj_len),
+            plotables(ys_full, xs_full, us_full, slsys, eff_traj_len),
+            axes= None if fig is None else fig.axes,
+            plot_fn=lambda ax, x, y: Axes.plot(ax, x, y, lnfmt, label=label),
+            figtitle=fig_string)
     if fig is not None:
+        fig.savefig(pjoin(plot_dir, fig_string + ".pdf"))
         fig.show()
         plt.show()
 

@@ -31,16 +31,12 @@ def getdefaultkw(func, *namepaths, sep="."):
 
 
 def list_extend(L, iterable=[]):
-    L.extend(iterable)
-    return L
+    return L + list(iterable)
 
 
 def list_extendable(L):
     return partial(list_extend, L)
 
-def dict_extend(D, *kw):
-    D.update(kw)
-    return D
 
 def dict_extendable(D):
-    return partial(dict_extend, D)
+    return partial(dict, D)

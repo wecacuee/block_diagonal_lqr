@@ -1,6 +1,6 @@
 from collections import deque
 from functools import partial
-from itertools import zip_longest
+from itertools import zip_longest, product
 from logging import basicConfig, getLogger, INFO, DEBUG
 basicConfig()
 LOG = getLogger(__name__)
@@ -405,7 +405,19 @@ def main():
                     transfer_mpc_admm,
                     None)])
         })
-    plot_separable_sys_results_()
+    for x0, y0 in product([0.1, 0.0, -0.1], repeat=2):
+        recpartial(plot_separable_sys_results_, {
+                "example.y0": [y0],
+                "example.x0": [x0]
+            })()
+
+    for r0 in map(np.exp, range(-2, 3)):
+        recpartial(
+            plot_separable_sys_results_,{
+                "example.r0": r0
+            })()
+
+
 
 
 if __name__ == '__main__':
