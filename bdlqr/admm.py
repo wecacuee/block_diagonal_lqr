@@ -3,7 +3,7 @@ from functools import partial
 from logging import basicConfig, getLogger, DEBUG, INFO
 basicConfig()
 LOG = getLogger(__name__)
-LOG.setLevel(DEBUG)
+LOG.setLevel(INFO)
 
 import numpy as np
 from numpy.linalg import norm

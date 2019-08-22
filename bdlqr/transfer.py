@@ -399,14 +399,10 @@ def test_transfer_separable_quad():
 def main():
     plot_separable_sys_results_ = recpartial(
         plot_separable_sys_results, {
-            "example.T": 30,
-            "example.y0": [-0.0],
-            "example.x0": [0.1],
+            "example.T": 15,
             "getsolvers_.iterable":
                 ([partial(
-                    recpartial(
-                        transfer_mpc_admm,
-                        { "solve_mpc_admm_.admm_.max_iter": 2 }),
+                    transfer_mpc_admm,
                     None)])
         })
     plot_separable_sys_results_()
