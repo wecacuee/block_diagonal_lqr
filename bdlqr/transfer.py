@@ -419,18 +419,24 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1,
 
 
 def transfer_mpc_admm_set_upper_bound(transfer_mpc_admm_=transfer_mpc_admm,
-                                      upper_bound_factor=no_upper_bound_factor):
-    return recpartial(
+                                      upper_bound_factor=no_upper_bound_factor,
+                                      name="transfer_mpc_admm"):
+    partialfunc = recpartial(
         transfer_mpc_admm_,
         {"solve_mpc_admm_.proximal_robot_solution_.proximal_robot_linsys_.upper_bound_factor": upper_bound_factor,
          "proximal_env_solution_.proximal_env_linsys_.upper_bound_factor": upper_bound_factor})
+    partialfunc.__name__ = name
+    return partialfunc
 
 
-bounded_transfer_mpc_admm = transfer_mpc_admm_set_upper_bound(upper_bound_factor=tri_ineq_upper_bound_factor)
-bounded_transfer_mpc_admm.__name__ = "bounded_transfer_mpc_admm"
+tri_ineq_transfer_mpc_admm = transfer_mpc_admm_set_upper_bound(
+    upper_bound_factor=tri_ineq_upper_bound_factor,
+    name="tri_ineq_transfer_mpc_admm")
 
-lypunov_transfer_mpc_admm = transfer_mpc_admm_set_upper_bound(upper_bound_factor=lypunov_exponent_upper_bound_factor)
-lypunov_transfer_mpc_admm.__name__ = "lypunov_transfer_mpc_admm"
+
+lypunov_transfer_mpc_admm = transfer_mpc_admm_set_upper_bound(
+    upper_bound_factor=lypunov_exponent_upper_bound_factor,
+    name="lypunov_transfer_mpc_admm")
 
 
 def solve_by_transfer(slsys1):
@@ -458,7 +464,7 @@ def main():
                     transfer_mpc_admm,
                     None),
                   partial(
-                      bounded_transfer_mpc_admm,
+                      tri_ineq_transfer_mpc_admm,
                       None),
                   partial(
                       lypunov_transfer_mpc_admm,
