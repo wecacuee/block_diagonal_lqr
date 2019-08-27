@@ -12,7 +12,8 @@ from scipy.optimize import fmin
 from kwplus.functools import recpartial
 
 from bdlqr.separable import (SeparableLinearSystem, joint_linear_system,
-                             plot_separable_sys_results, list_extendable)
+                             plot_separable_sys_results, list_extendable,
+                             solve_full, solve_seq)
 from bdlqr.linalg import ScalarQuadFunc
 from bdlqr.lqr import LinearSystem
 from bdlqr.admm import admm
@@ -82,7 +83,34 @@ def independent_cost_to_go(slsys, max_iter=100):
     return Vfs
 
 
-def proximal_env_linsys(slsys, ṽks, ρ, t):
+def no_upper_bound_factor(slsys, t):
+    return 1
+
+
+def tri_ineq_upper_bound_factor(slsys, t):
+    """
+    Assume ||xₜ₊₁ - xₜ|| ≤ ϵ and ||v*ₜ₊₁ - v*ₜ|| ≤ δ
+
+    Then ||ṽₜ₊ₖ - v*ₜ₊ₖ|| ≤ kEϵ + kδ + ||ṽₜ - v*ₜ||
+    And ∑ₖ₌ₜᵀ ||ṽₖ - v*ₖ|| ≤ (T-t+1)(kEϵ + kδ + ||ṽₜ - v*ₜ||)
+    """
+    return (slsys.T-t+1)
+
+
+def lypunov_exponent_upper_bound_factor(slsys, t, λ=-0.5):
+    """
+    Assume |ṽₜ - vₜ| ≈ e^λᵗ |ṽ₀ - v₀|
+
+    And ∑ₖ₌ₜᵀ ||ṽₖ - v*ₖ|| ≤ (∑ₖ₌₀ᵀ⁻ᵗ exp(λt)) ||ṽ₀-v*₀||
+
+    (∑ₖ₌₀ᵀ⁻ᵗ exp(λt)) = (exp(λ(T-t)) - 1) / (exp(λ) - 1)
+    """
+    T = slsys.T
+    return (1 - np.exp(λ*(T-t+1))) / (1-np.exp(λ))
+
+
+def proximal_env_linsys(slsys, ṽks, ρ, t,
+                        upper_bound_factor=no_upper_bound_factor):
     """
 
     Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ T |vₜ - ṽₜ| + GV(yₖ₊₁)
@@ -99,13 +127,13 @@ def proximal_env_linsys(slsys, ṽks, ρ, t):
     vhD = vD + 1
     # V(y, ṽ) = arg min_v ∑_ṽ 0.5 ρ T |ṽₜ - vₜ]_2^2 + ∑ₜ y Q y
     #            yₜ₊₁   = Ay yₜ   + Bv vₜ
-    # V(y, ṽ) = arg min_v ∑ y Q y + 0.5 ρ [vₜᵀ, 1] [    1, -ṽₜ]  [vₜ ]
-    #                                              [-ṽₜᵀ,  ṽ^2]  [   1]
+    # V(y, ṽ) = arg min_v ∑ y Q y + 0.5 ρ T [vₜᵀ, 1] [    1, -ṽₜ]  [vₜ ]
+    #                                                [-ṽₜᵀ,  ṽ^2]  [   1]
     #            yₜ₊₁   = Ay yₜ   + [Bv, 0] [vₜ]
     #                                       [ 1]
     sy  = np.zeros(yD)
     oyT = np.zeros(yD)
-    ρT = ρ * (slsys.T - t + 1)
+    ρT = ρ * upper_bound_factor(slsys, t)
     Rsv = [0.5 * ρT * np.eye(vD) for _ in ṽks]
     zsv = [-0.5 * ρT * ṽt for ṽt in ṽks]
 
@@ -120,7 +148,8 @@ def proximal_env_linsys(slsys, ṽks, ρ, t):
     return LinearSystem(Ay, Bv, Qy, sy, Rsv, zsv, IV.Q, IV.l, len(Rsv), γ=slsys.γ)
 
 
-def proximal_robot_linsys(mslsys, vks, wks, ρ, t):
+def proximal_robot_linsys(mslsys, vks, wks, ρ, t,
+                          upper_bound_factor=no_upper_bound_factor):
     """
 
     Vₚᵣₒₓ(xₜ, vsₜ₊₁:) = min_u uᵀRu + 0.5 ρ |Exₜ₊₁(u) + wₜ₊₁/ρ - vₜ₊₁|₂² + ∑ⁿₜ₌₁ uₜᵀRuₜ
@@ -143,7 +172,7 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ, t):
     xhD = xD + 1
     vdesired = [(-vtp1 + wtp1/ρ)[:, None]
                 for vtp1, wtp1 in zip(vks, wks)]
-    ρT = ρ * (mslsys.T - t + 1)
+    ρT = ρ * upper_bound_factor(mslsys, t)
     Qxhs = [0.5 * ρT * np.vstack((np.hstack((E.T.dot(E), vdtp1)),
                                   np.hstack((vdtp1.T, vdtp1.T.dot(vdtp1)))))
             for vdtp1 in vdesired]
@@ -156,13 +185,15 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ, t):
     return LinearSystem(Axh, Buh, Qxhs[:-1], sxh, R, zu, Qxhs[-1], sxh, len(Qxhs), γ=mslsys.γ)
 
 
-def proximal_robot_solution(mslsys, vks, wks, ρ, t):
-    sys_h = proximal_robot_linsys(mslsys, vks, wks, ρ, t)
+def proximal_robot_solution(mslsys, vks, wks, ρ, t,
+                            proximal_robot_linsys_=proximal_robot_linsys):
+    sys_h = proximal_robot_linsys_(mslsys, vks, wks, ρ, t)
     ufhs, Vfhs = sys_h.solve_f(return_min=True)
     return list(ufhs), list(Vfhs)
 
 
-def proximal_env_solution(slsys, ṽks, ρ, t):
+def proximal_env_solution(slsys, ṽks, ρ, t,
+                          proximal_env_linsys_=proximal_env_linsys):
     """
 
     Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ T |vₜ - ṽₜ| + GV(yₖ₊₁)
@@ -192,7 +223,7 @@ def proximal_env_solution(slsys, ṽks, ρ, t):
     ...                     for xt, vkt in zip(xs, vks))).all()
     True
     """
-    prox_env_sys = proximal_env_linsys(slsys, ṽks, ρ, t)
+    prox_env_sys = proximal_env_linsys_(slsys, ṽks, ρ, t)
     ufs, Vfs = prox_env_sys.solve_f(return_min=True)
     return list(ufs), list(Vfs)
 
@@ -293,7 +324,8 @@ def quadrotor_as_separable(Ay  = [[1.]],
             SeparableLinearSystem(*map(np.array, (Qy, R2, Ay, Bv, QyT, E2, Ax2, Bu2, T, γ))))
 
 
-def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, admm_=admm, k_mpc=1):
+def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, admm_=admm, k_mpc=1,
+                   proximal_robot_solution_=proximal_robot_solution):
     """
     """
     if k_mpc != 1: raise NotImplementedError()
@@ -328,7 +360,7 @@ def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, admm_=admm, k_mpc=1):
         # ws = [wₜ₊₁]
         if len(vs) != k_mpc: raise NotImplementedError()
         if len(ws) != k_mpc: raise NotImplementedError()
-        ufhs, Vfhs = proximal_robot_solution(mslsys2, vs, ws, ρ, t)
+        ufhs, Vfhs = proximal_robot_solution_(mslsys2, vs, ws, ρ, t)
         ufh0 = ufhs[0]
         us = ufh0(np.hstack((xt, [1]))).reshape(1, -1)
         # us = [uₜ]
@@ -355,7 +387,8 @@ def training_system_equal(slsys2):
 
 
 def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1,
-                      solve_mpc_admm_=solve_mpc_admm):
+                      solve_mpc_admm_=solve_mpc_admm,
+                      proximal_env_solution_=proximal_env_solution):
     """
     @param solve_mpc_admm_: Pre-configured solve_mpc_admm
     """
@@ -366,7 +399,7 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1,
         # ṽks = [ṽₜ₊₁]
         # vₜ₊₁ = arg minᵥ vₜ R vₜ + V(yₜ₊₂(yₜ, uₜ))
         ytp1 = slsys1.f_y(yt, vt)
-        vfs, Vfs = proximal_env_solution(slsys1, ṽks, ρ, t+1)
+        vfs, Vfs = proximal_env_solution_(slsys1, ṽks, ρ, t+1)
         return vfs[0](ytp1)
 
     mslsys1 = MaskEnvDynamics(slsys1)
@@ -385,6 +418,21 @@ def transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len, ρ=1,
     return ys, xs, us
 
 
+def transfer_mpc_admm_set_upper_bound(transfer_mpc_admm_=transfer_mpc_admm,
+                                      upper_bound_factor=no_upper_bound_factor):
+    return recpartial(
+        transfer_mpc_admm_,
+        {"solve_mpc_admm_.proximal_robot_solution_.proximal_robot_linsys_.upper_bound_factor": upper_bound_factor,
+         "proximal_env_solution_.proximal_env_linsys_.upper_bound_factor": upper_bound_factor})
+
+
+bounded_transfer_mpc_admm = transfer_mpc_admm_set_upper_bound(upper_bound_factor=tri_ineq_upper_bound_factor)
+bounded_transfer_mpc_admm.__name__ = "bounded_transfer_mpc_admm"
+
+lypunov_transfer_mpc_admm = transfer_mpc_admm_set_upper_bound(upper_bound_factor=lypunov_exponent_upper_bound_factor)
+lypunov_transfer_mpc_admm.__name__ = "lypunov_transfer_mpc_admm"
+
+
 def solve_by_transfer(slsys1):
     return partial(transfer_mpc_admm, slsys1)
 
@@ -401,24 +449,36 @@ def test_transfer_separable_quad():
 def main():
     plot_separable_sys_results_ = recpartial(
         plot_separable_sys_results, {
-            "example.T": 15,
-            "getsolvers_.iterable":
-                ([partial(
+            "example.T": 40,
+            "getsolvers_":
+            list_extendable(
+                [solve_full,
+                 solve_seq,
+                 partial(
                     transfer_mpc_admm,
-                    None)])
+                    None),
+                  partial(
+                      bounded_transfer_mpc_admm,
+                      None),
+                  partial(
+                      lypunov_transfer_mpc_admm,
+                      None)
+                ])
         })
-    for x0, y0 in product([0.1, 0.0, -0.1], repeat=2):
-        recpartial(plot_separable_sys_results_, {
-                "example.y0": [y0],
-                "example.x0": [x0]
-            })()
 
-    for r0 in map(np.exp, range(-2, 3)):
+    pow10 = partial(np.float_power, 10)
+    for r0 in map(pow10, range(-2, 5)):
         recpartial(
             plot_separable_sys_results_,{
                 "example.r0": r0
             })()
 
+
+    for x0, y0 in product([0.1, 0.0, -0.1], repeat=2):
+        recpartial(plot_separable_sys_results_, {
+                "example.y0": [y0],
+                "example.x0": [x0]
+            })()
 
 
 
