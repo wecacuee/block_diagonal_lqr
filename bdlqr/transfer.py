@@ -55,7 +55,7 @@ def independent_env_linsys(slsys):
 
 def independent_cost_to_go(slsys, max_iter=100):
     """
-    V(y₀) = arg min_v ∑ₜ c(yₜ)
+    V(y₀) = min_v ∑ₜ c(yₜ)
             s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
 
     Let Vₜ(yₜ) = yₜᵀ Pₜ yₜ + 2 oₜᵀyₜ
@@ -85,7 +85,7 @@ def independent_cost_to_go(slsys, max_iter=100):
 def proximal_env_linsys(slsys, ṽks, ρ, t):
     """
 
-    Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ |vₜ - ṽₜ| + GV(yₖ₊₁)
+    Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ T |vₜ - ṽₜ| + GV(yₖ₊₁)
     """
     n = len(ṽks)
     Qy   = slsys.Qy
@@ -97,7 +97,7 @@ def proximal_env_linsys(slsys, ṽks, ρ, t):
     yD  = Ay.shape[-1]
     vD  = Bv.shape[-1]
     vhD = vD + 1
-    # V(y, ṽ) = arg min_v ∑_ṽ 0.5 ρ |ṽₜ - vₜ]_2^2 + ∑ₜ y Q y
+    # V(y, ṽ) = arg min_v ∑_ṽ 0.5 ρ T |ṽₜ - vₜ]_2^2 + ∑ₜ y Q y
     #            yₜ₊₁   = Ay yₜ   + Bv vₜ
     # V(y, ṽ) = arg min_v ∑ y Q y + 0.5 ρ [vₜᵀ, 1] [    1, -ṽₜ]  [vₜ ]
     #                                              [-ṽₜᵀ,  ṽ^2]  [   1]
@@ -105,21 +105,22 @@ def proximal_env_linsys(slsys, ṽks, ρ, t):
     #                                       [ 1]
     sy  = np.zeros(yD)
     oyT = np.zeros(yD)
-    Rsv = [0.5 * ρ * np.eye(vD) for _ in ṽks]
-    zsv = [-0.5 * ρ * ṽt for ṽt in ṽks]
+    ρT = ρ * (slsys.T - t + 1)
+    Rsv = [0.5 * ρT * np.eye(vD) for _ in ṽks]
+    zsv = [-0.5 * ρT * ṽt for ṽt in ṽks]
 
     # IV(y₀) := arg min_v ∑ₜ yₜᵀQyₜ
     #         s.t.  yₜ₊₁ = Ay yₜ + Bv vₜ   ∀ t
     if slsys.T > t + len(ṽks):
         slsys_remaining = SeparableLinearSystem.copy(slsys,
-                                                    T=slsys.T - t - len(ṽks))
+                                                     T=slsys.T - t - len(ṽks))
         IV, *_ = independent_cost_to_go(slsys_remaining)
     else:
         IV = ScalarQuadFunc(np.zeros_like(Qy), np.zeros_like(sy), np.zeros(1))
     return LinearSystem(Ay, Bv, Qy, sy, Rsv, zsv, IV.Q, IV.l, len(Rsv), γ=slsys.γ)
 
 
-def proximal_robot_linsys(mslsys, vks, wks, ρ):
+def proximal_robot_linsys(mslsys, vks, wks, ρ, t):
     """
 
     Vₚᵣₒₓ(xₜ, vsₜ₊₁:) = min_u uᵀRu + 0.5 ρ |Exₜ₊₁(u) + wₜ₊₁/ρ - vₜ₊₁|₂² + ∑ⁿₜ₌₁ uₜᵀRuₜ
@@ -142,9 +143,10 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ):
     xhD = xD + 1
     vdesired = [(-vtp1 + wtp1/ρ)[:, None]
                 for vtp1, wtp1 in zip(vks, wks)]
-    Qxhs = [0.5 * ρ * np.vstack((np.hstack((E.T.dot(E), vdtp1)),
-                                 np.hstack((vdtp1.T, vdtp1.T.dot(vdtp1)))))
-           for vdtp1 in vdesired]
+    ρT = ρ * (mslsys.T - t + 1)
+    Qxhs = [0.5 * ρT * np.vstack((np.hstack((E.T.dot(E), vdtp1)),
+                                  np.hstack((vdtp1.T, vdtp1.T.dot(vdtp1)))))
+            for vdtp1 in vdesired]
     sxh  = np.zeros(xhD)
     zu  = np.zeros(uD)
     oyT = np.zeros(xhD)
@@ -154,8 +156,8 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ):
     return LinearSystem(Axh, Buh, Qxhs[:-1], sxh, R, zu, Qxhs[-1], sxh, len(Qxhs), γ=mslsys.γ)
 
 
-def proximal_robot_solution(mslsys, vks, wks, ρ):
-    sys_h = proximal_robot_linsys(mslsys, vks, wks, ρ)
+def proximal_robot_solution(mslsys, vks, wks, ρ, t):
+    sys_h = proximal_robot_linsys(mslsys, vks, wks, ρ, t)
     ufhs, Vfhs = sys_h.solve_f(return_min=True)
     return list(ufhs), list(Vfhs)
 
@@ -163,7 +165,7 @@ def proximal_robot_solution(mslsys, vks, wks, ρ):
 def proximal_env_solution(slsys, ṽks, ρ, t):
     """
 
-    Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ |vₜ - ṽₜ| + GV(yₖ₊₁)
+    Vₚᵣₒₓ(y₁, ṽs₁) = minᵥ ∑ⁿₜ₌₁ yₜᵀQyₜ + 0.5 ρ T |vₜ - ṽₜ| + GV(yₖ₊₁)
 
     Let Vₜ(yₜ) = yₜᵀ Pₜ(ṽs₁) yₜ + 2 oₜᵀyₜ
     return ScalarQuadFunc(Pₜ, oₜ, 0)
@@ -326,7 +328,7 @@ def solve_mpc_admm(argmin_Q1, mslsys2, yt, xt, ρ, t, admm_=admm, k_mpc=1):
         # ws = [wₜ₊₁]
         if len(vs) != k_mpc: raise NotImplementedError()
         if len(ws) != k_mpc: raise NotImplementedError()
-        ufhs, Vfhs = proximal_robot_solution(mslsys2, vs, ws, ρ)
+        ufhs, Vfhs = proximal_robot_solution(mslsys2, vs, ws, ρ, t)
         ufh0 = ufhs[0]
         us = ufh0(np.hstack((xt, [1]))).reshape(1, -1)
         # us = [uₜ]

@@ -3,3 +3,4 @@
 block_diagonal_lqr.egg-info
 /tex/main.pdf
 /tex/nohup.out
+.installed-apt-get-requirements.flag
