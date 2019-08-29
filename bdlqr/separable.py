@@ -366,9 +366,9 @@ class SeparableLinearSystem(_SeparableLinearSystem):
 
 def plotables(ys, xs, us, linsys, traj_len):
     costs = linsys.costs(ys, xs, us)[:traj_len]
-    return [("pos", np.array([y[0] for y in ys[:traj_len]])),
-            ("vel", np.array([x[0] for x in xs[:traj_len]])),
-            ("ctrl", np.array(us[:traj_len])),
+    return [("pos: y[0]", np.array([y[0] for y in ys[:traj_len]])),
+            ("vel: x[0]", np.array([x[0] for x in xs[:traj_len]])),
+            ("ctrl: u[0]", np.array(us[:traj_len])),
             ("cost", costs)]
 
 
@@ -397,11 +397,20 @@ def quadrotor_as_separable(m  = 1,
     return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T, γ)))
 
 
+def array2string(arr,
+                 arr2str=partial(np.array2string,
+                                 separator=",",
+                                 suppress_small=True),
+                 translate=("\n", " ")):
+    return arr2str(arr).translate(str.maketrans(*translate))
+
+
 def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
                                getsolvers_=list_extendable(
                                    [solve_full, solve_seq, solve_admm]),
                                line_specs='b.- g,-- ro cv- m^- y<- k>-'.split(),
                                plot_dir="/tmp/",
+                               arr2str=array2string,
                                fig_string_fmt="Q={Q}, R={R}, x0={x0}, y0={y0}".format):
     plotables, y0, x0, *sepsys = example()
     fig = None
@@ -410,7 +419,10 @@ def plot_separable_sys_results(example=quadrotor_as_separable, traj_len=30,
     labels = map(getname, solvers)
     short_labels = diff_substr(labels)
     eff_traj_len = min(slsys.T, traj_len)
-    fig_string = fig_string_fmt(Q=slsys.Qy, R=slsys.R, x0=x0, y0=y0)
+    fig_string = fig_string_fmt(Q=arr2str(slsys.Qy),
+                                R=arr2str(slsys.R),
+                                x0=arr2str(x0),
+                                y0=arr2str(y0))
     for solver, label, lnfmt in zip(solvers, short_labels, line_specs):
         ys_full, xs_full, us_full = solver(slsys, y0, x0, eff_traj_len)
         y1 = slsys.Ay.dot(y0) + slsys.Bv.dot(slsys.E).dot(x0)

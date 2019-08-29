@@ -13,7 +13,7 @@ from kwplus.functools import recpartial
 
 from bdlqr.separable import (SeparableLinearSystem, joint_linear_system,
                              plot_separable_sys_results, list_extendable,
-                             solve_full, solve_seq)
+                             solve_full, solve_seq, plotables)
 from bdlqr.linalg import ScalarQuadFunc
 from bdlqr.lqr import LinearSystem
 from bdlqr.admm import admm
@@ -167,14 +167,14 @@ def proximal_robot_linsys(mslsys, vks, wks, ρ, t,
     xD  = Ax.shape[-1]
     uD  = Bu.shape[-1]
     # Vₚᵣₒₓ(xₜ, vsₜ₊₁:) = min_u uᵀRu + 0.5 ρ |Exₜ₊₁(u) + wₜ₊₁/ρ - vₜ₊₁|₂² + ∑ⁿₜ₌₁ uₜᵀRuₜ
-    # Qx = 0.5 ρ [           EᵀE,                    -vₜ₊₁ + wₜ₊₁/ρ]
-    #            [-vₜ₊₁ + wₜ₊₁/ρ, (-vₜ₊₁ + wₜ₊₁/ρ)ᵀ(-vₜ₊₁ + wₜ₊₁/ρ)]
+    # Qx = 0.5 ρ [           EᵀE,                    -Eᵀvₜ₊₁ + Eᵀwₜ₊₁/ρ]
+    #            [-vₜ₊₁ᵀE + wₜ₊₁ᵀE/ρ, (-vₜ₊₁ + wₜ₊₁/ρ)ᵀ(-vₜ₊₁ + wₜ₊₁/ρ)]
     xhD = xD + 1
     vdesired = [(-vtp1 + wtp1/ρ)[:, None]
                 for vtp1, wtp1 in zip(vks, wks)]
     ρT = ρ * upper_bound_factor(mslsys, t)
-    Qxhs = [0.5 * ρT * np.vstack((np.hstack((E.T.dot(E), vdtp1)),
-                                  np.hstack((vdtp1.T, vdtp1.T.dot(vdtp1)))))
+    Qxhs = [0.5 * ρT * np.vstack((np.hstack((E.T.dot(E),     E.T.dot(vdtp1))),
+                                  np.hstack((vdtp1.T.dot(E), vdtp1.T.dot(vdtp1)))))
             for vdtp1 in vdesired]
     sxh  = np.zeros(xhD)
     zu  = np.zeros(uD)
@@ -439,54 +439,81 @@ lypunov_transfer_mpc_admm = transfer_mpc_admm_set_upper_bound(
     name="lypunov_transfer_mpc_admm")
 
 
-def solve_by_transfer(slsys1):
-    return partial(transfer_mpc_admm, slsys1)
+def example_multi_dim_double_integrator(r0 = 1,
+                                        Ay = np.eye(2),
+                                        Bv = np.eye(2),
+                                        E  = [[1., 1, 0, 0],
+                                              [0., 0, 1, 1]],
+                                        Qy = np.eye(2),
+                                        Ax = [[0., 1, 0, 0],
+                                              [0, 0, 1, 0],
+                                              [0, 0, 0, 1],
+                                              [0, 0, 0, 0]],
+                                        Bu = [[0.],
+                                              [0],
+                                              [0],
+                                              [1]],
+                                        y0 = [-1],
+                                        x0 = [0.],
+                                        T  = 30,
+                                        γ  = 1):
+    R=[[r0]]
+    QyT = np.asarray(Qy)*100
+    xD = np.asarray(Ax).shape[-1]
+    yD = np.asarray(Ay).shape[-1]
+    x0 = np.ones(xD) * x0
+    y0 = np.ones(yD) * y0
+    return [plotables] + list(map(np.asarray, (y0, x0, Qy, R, Ay, Bv, QyT, E, Ax, Bu, T, γ)))
 
+def plot_separable_sys_results_configs(parent_conf={}, configs_gen=list):
+    parent_conf.update({
+        "example.T": 40,
+        "getsolvers_":
+        list_extendable(
+            [solve_full,
+             solve_seq,
+             partial(
+                 transfer_mpc_admm,
+                 None),
+             partial(
+                 tri_ineq_transfer_mpc_admm,
+                 None),
+             partial(
+                 lypunov_transfer_mpc_admm,
+                 None)
+            ])
+    })
 
-def test_transfer_separable_quad():
-    slsys1, slsys2 = quadrotor_as_separable()
-    y0 = np.array([0.])
-    x0 = np.array([0.])
-    ρ = 1
-    traj_len = 3
-    transfer_mpc_admm(slsys1, slsys2, y0, x0, traj_len)
-
-
-def main():
-    plot_separable_sys_results_ = recpartial(
-        plot_separable_sys_results, {
-            "example.T": 40,
-            "getsolvers_":
-            list_extendable(
-                [solve_full,
-                 solve_seq,
-                 partial(
-                    transfer_mpc_admm,
-                    None),
-                  partial(
-                      tri_ineq_transfer_mpc_admm,
-                      None),
-                  partial(
-                      lypunov_transfer_mpc_admm,
-                      None)
-                ])
-        })
-
+    configs = configs_gen()
     pow10 = partial(np.float_power, 10)
     for r0 in map(pow10, range(-2, 5)):
-        recpartial(
-            plot_separable_sys_results_,{
+        ccopy = parent_conf.copy()
+        ccopy.update({
                 "example.r0": r0
-            })()
+        })
+        configs.append(ccopy)
 
 
     for x0, y0 in product([0.1, 0.0, -0.1], repeat=2):
-        recpartial(plot_separable_sys_results_, {
+        ccopy = parent_conf.copy()
+        ccopy.update({
                 "example.y0": [y0],
                 "example.x0": [x0]
-            })()
+        })
+        configs.append(ccopy)
+
+    return configs
 
 
+plot_separable_sys_results_multi_dim_configs = partial(
+    plot_separable_sys_results_configs,
+    parent_conf={"example":example_multi_dim_double_integrator})
+
+
+def main(func=plot_separable_sys_results,
+         configs_gen=plot_separable_sys_results_multi_dim_configs):
+    for conf in configs_gen():
+        recpartial(func, conf)()
 
 if __name__ == '__main__':
     main()
