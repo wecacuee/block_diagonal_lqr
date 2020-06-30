@@ -12,6 +12,7 @@ def scriptrel(relfile, scriptdir=scriptdir):
 
 
 setup(name='block-diagonal-lqr',
+      version='0.1.0',
       packages=find_packages(),
       install_requires=open(scriptrel('requirements.txt')).readlines(),
       #install_requires=['numpy', 'matplotlib', 'scipy'],

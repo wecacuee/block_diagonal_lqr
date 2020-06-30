@@ -64,6 +64,8 @@ def admm(proximals, x0, z0, w0, const_fn, ρ,
             if objs:
                 LOG.debug(" f(x)=%0.03f, g(z)=%0.03f", objs[0](xk) , objs[1](zk))
             LOG.debug(" |Ax+Bz-c|=%0.03f", norm(const_fn(np.hstack((xk, zk)))[0]))
+        # TODO: Make the breaking criterion depend on primal and dual residual instead of
+        # norms
         if change < thresh:
             LOG.debug("breaking after {} < {} iterations with change = {} < {}"
                       .format(k, max_iter, change, thresh))
